@@ -159,3 +159,12 @@ test('date-role labels separate equal old opening start and end dates',()=>{
  assert.equal(rendered(task,endId),'8月12日');
  assert.ok(operations(task,endId).some(o=>o.kind==='highlight'));
 });
+
+test('a multi-line poster title preserves semantic line breaks across a different series name',()=>{
+ const before='青澜资产\n福星君享年华\n12个月2号\n集合资产管理计划';
+ const t=poster([{id:'name',text:before}],{includeName:false});
+ const c={name:'合同.docx',warnings:[],blocks:[{id:'name',text:'产品名称：青澜资产福星君享（信用优享）18个月5号集合资产管理计划'}]};
+ const task=analyzeMaterials(c,[t]);
+ assert.equal(rendered(task,'name'),'青澜资产\n福星君享（信用优享）\n18个月5号\n集合资产管理计划');
+ assert.ok(operations(task,'name').filter(o=>o.kind==='replace').every(o=>!/[\r\n]/.test(o.before+o.after)),'each edit stays inside its original title line');
+});
