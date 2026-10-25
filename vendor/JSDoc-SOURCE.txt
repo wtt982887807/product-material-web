@@ -1,0 +1,13 @@
+Project: Alpaq92/JSDoc
+Repository: https://github.com/Alpaq92/JSDoc
+Revision: 821695a884e0c0bb8592a635d9524bb3e116cd67
+License: 0BSD (LICENSE-JSDoc.txt)
+
+vendor/docToText.js is copied without modification from src/docToText.js.
+tests/doc-fixture.cjs is copied without modification from test/make-fixture.js,
+with only the filename extension changed for this ES module project.
+Both files are offline-only; no uploaded contents are sent over the network.
+
+SHA-256:
+docToText.js: 1480cd409c36b0e8890509516ff6909dffd73a825211e821e1e09b880fc635db
+doc-fixture.cjs: f8887da0ccd0689de65294293763e91de6632924f8268781e89ceca6aa8ac466
