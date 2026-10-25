@@ -220,6 +220,7 @@ function validateWordComments(pkg,comments,ids) {
 export async function writeMaterial(materialReview,{month,targetName,now=new Date()}={}) {
   const template=materialReview?.template;
   if(!template||!['docx','pptx'].includes(template.kind))fail('请选择有效的 Word 或 PPTX 模板。');
+  if(materialReview.productElementsLocated===false)fail('未识别到可定位的产品要素，未生成此模板，避免只改文件名而保留旧产品正文。');
   const sourceHash=await sha256(template.bytes);
   if(template.sha256&&template.sha256!==sourceHash)fail('上传的模板在审阅后发生变化，请重新上传。');
   const pkg=await OfficePackage.load(template.bytes),groups=await prepare(pkg,materialReview),kind=template.kind;
@@ -264,8 +265,14 @@ export async function writeMaterial(materialReview,{month,targetName,now=new Dat
 
 export async function writeTask(task) {
   if(!task||!Array.isArray(task.materials)||!task.materials.length)fail('没有可生成的物料。');
-  const files=[];
-  for(const material of task.materials)files.push(await writeMaterial(material,{month:task.month,targetName:task.target?.name,now:task.now||new Date()}));
-  const names=uniqueDeliveryNames(files.map(file=>file.name));files.forEach((file,index)=>{file.name=names[index];});
-  return {files,report:{fileCount:files.length,structuralValidation:true,businessVerified:files.every(f=>f.report.businessVerified),files:files.map(f=>({name:f.name,...f.report}))}};
+  const files=[],failures=[],now=task.now||new Date(),month=task.month||currentMonth(now),targetName=task.target?.name;
+  // Reserve all preview names, including failed items, so surviving deliveries
+  // do not unexpectedly take another template's name after a partial failure.
+  const names=uniqueDeliveryNames(task.materials.map((m,i)=>{try{return deliveryName(m.template?.name,{targetName,templateProductName:m.templateProductName,kind:m.kind,month});}catch{return `未命名物料-${i+1}`;}}));
+  for(const [index,material]of task.materials.entries()){
+    try{const file=await writeMaterial(material,{month,targetName,now});file.name=names[index];files.push(file);}
+    catch(error){failures.push({sourceName:material.template?.originalName||material.template?.name||`物料${index+1}`,stage:'generate',message:error.message||String(error)});}
+  }
+  if(!files.length)fail('没有物料成功生成。'+failures.map(f=>`${f.sourceName}：${f.message}`).join('\n'));
+  return {files,failures,report:{fileCount:files.length,requestedCount:task.materials.length,complete:!failures.length,failures,structuralValidation:true,businessVerified:!failures.length&&files.every(f=>f.report.businessVerified),files:files.map(f=>({name:f.name,...f.report}))}};
 }

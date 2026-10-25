@@ -155,9 +155,10 @@ function finish(task){
 
 export function applyCompanyProfile(task,profile){
  if(!profile||profile.schemaVersion!==1||!Array.isArray(profile.sections)||!/^[0-9a-f]{64}$/.test(profile.sha256||''))throw new Error('公司介绍资料无效，请重新导入。');
- task.facts=task.facts.filter(f=>f.source!=='company');task.warnings=(task.warnings||[]).filter(w=>!w.startsWith('公司介绍：'));
+ const isCompanyWarning=w=>(typeof w==='string'?w:w?.message||'').startsWith('公司介绍：');
+ task.facts=task.facts.filter(f=>f.source!=='company');task.warnings=(task.warnings||[]).filter(w=>!isCompanyWarning(w));
  for(const m of task.materials){
-  m.operations=m.operations.filter(o=>o.source!=='company');m.fields=m.fields.filter(f=>f.source!=='company');m.warnings=(m.warnings||[]).filter(w=>!w.startsWith('公司介绍：'));
+  m.operations=m.operations.filter(o=>o.source!=='company');m.fields=m.fields.filter(f=>f.source!=='company');m.warnings=(m.warnings||[]).filter(w=>!isCompanyWarning(w));
   if(m.kind!=='word'||m.template.kind!=='docx')continue;
   const found=sections(m.template);if(!found.length){warning(task,m,'未找到可确认主体与版式的公司介绍区域，已保留原文。');continue;}
   let matched=false;

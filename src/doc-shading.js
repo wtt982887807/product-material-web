@@ -7,7 +7,7 @@ const SIGNATURE = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
 const END = 0xfffffffe, FREE = 0xffffffff;
 const RAW = new Map([[0xd670, 0xd612], [0xd671, 0xd616], [0xd672, 0xd60c]]);
 const LEGACY = new Set([0xd609, 0xd612, 0xd616, 0xd60c]);
-const fail = reason => { throw new Error('旧版 Word 底纹无法可靠保留：' + reason + '。请先在 Word 中另存为 DOCX。'); };
+const fail = reason => { const error=new Error('旧版 Word 底纹兼容预处理未完成：'+reason+'。');error.code='DOC_SHADING_UNSUPPORTED';error.reason=reason;throw error; };
 const require = (condition, reason = '文件结构不受支持') => { if (!condition) fail(reason); };
 
 /** Preserve explicit cell fills without rewriting any text, RGB or file offsets. */
@@ -105,7 +105,7 @@ export function normalizeLegacyDocShading(bytes) {
     for (const [offset, value] of patches) copy[offset] = value;
     return copy;
   } catch (error) {
-    if (error.message?.startsWith('旧版 Word 底纹')) throw error;
+    if (error.code === 'DOC_SHADING_UNSUPPORTED') throw error;
     fail('格式结构读取失败');
   }
 }
@@ -119,7 +119,9 @@ function reader(bytes) {
 function compoundFile(bytes) {
   const r = reader(bytes), version = r.u16(26), shift = r.u16(30), sectorSize = 2 ** shift;
   require(r.u16(28) === 0xfffe && ((version === 3 && shift === 9) || (version === 4 && shift === 12)) && r.u16(32) === 6 && r.u32(56) === 4096, '复合文件版本不受支持');
-  const totalSectors = Math.floor(bytes.length / sectorSize) - 1, reserved = new Set(), claimed = new Map();
+  // Some Word producers omit padding after the last stream's logical end.
+  // Count that physical fragment, but require every byte actually read below.
+  const totalSectors = Math.ceil(bytes.length / sectorSize) - 1, reserved = new Set(), claimed = new Map();
   const sector = sid => { require(sid < totalSectors, '复合文件扇区越界'); return (sid + 1) * sectorSize; };
   const reserve = sid => { sector(sid); require(!reserved.has(sid), '复合文件索引重复'); reserved.add(sid); };
   const fatSectors = [];
@@ -146,7 +148,11 @@ function compoundFile(bytes) {
     const length = size ?? ids.length * sectorSize;
     require(length <= ids.length * sectorSize && (size == null || ids.length === Math.ceil(size / sectorSize)), '复合文件数据长度不符');
     const value = new Uint8Array(length);
-    ids.forEach((id, i) => value.set(bytes.subarray(sector(id), sector(id) + Math.min(sectorSize, length - i * sectorSize)), i * sectorSize));
+    ids.forEach((id, i) => {
+      const at=sector(id),count=Math.min(sectorSize,length-i*sectorSize);
+      require(at+count<=bytes.length,'复合文件数据被截断');
+      value.set(bytes.subarray(at,at+count),i*sectorSize);
+    });
     return {bytes: value, physical(p) { require(p >= 0 && p < length, '格式写入越界'); return sector(ids[Math.floor(p / sectorSize)]) + p % sectorSize; }};
   };
   const directory = chain(r.u32(48), null, '$directory'), d = reader(directory.bytes), entries = [];

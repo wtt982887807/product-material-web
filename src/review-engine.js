@@ -19,7 +19,7 @@ const quote=(b,text=b.text)=>({blockId:b.id,quote:text.trim().slice(0,1600)});
 function keyFor(label){
  const l=labelNorm(label);
  if(l.length>32||/实力|简介|数据来源|奖项|股东/.test(l))return `custom:${l}`;
- const mappings=[['product_name',NAME_LABEL],['risk_rating',/风险(?:等级|评级)|产品评级/],['custodian',/托管人|保管人|托管行|集合托管人/],['manager',/管理人|受托人/],['advisor',/投资顾问/],['distributor',/销售机构|代销机构/],['product_code',/产品代码|产品编码/],['product_type',/产品类型|产品类别/],['performance',/业绩报酬|浮动.*费|浮动.*报酬/],['fees',/产品费率|管理、托管|费用/],['management_fee',/管理费|固定信托报酬/],['custody_fee',/托管费|保管费/],['subscription_fee',/认.*购.*费|参与费/],['redemption_fee',/赎回费|退出费/],['opening',/开放|预约/],['minimum_amount',/起购|认购规则|参与金额|首参|起点|认购金额/],['duration',/存续期|存续期限|产品期限/],['lockup',/封闭期|锁定期|持有期/],['warning_stop',/预警|止损/],['investment_objective',/投资目标/],['investment_scope',/投资范围/],['investment_ratios',/投资比例/],['investment_restrictions',/投资限制/],['investment_strategy',/投资策略/]];
+ const mappings=[['product_name',NAME_LABEL],['risk_rating',/风险(?:等级|评级)|产品评级/],['custodian',/托管人|保管人|托管行|保管行|集合托管人/],['manager',/管理人|受托人/],['advisor',/投资顾问/],['distributor',/销售机构|代销机构/],['product_code',/产品代码|产品编码/],['product_type',/产品类型|产品类别/],['performance',/业绩报酬|浮动.*费|浮动.*报酬/],['fees',/产品费率|管理、托管|费用/],['management_fee',/管理费|固定信托报酬/],['custody_fee',/托管费|保管费/],['subscription_fee',/认.*购.*费|参与费/],['redemption_fee',/赎回费|退出费/],['opening',/开放|预约/],['minimum_amount',/起购|认购规则|参与金额|首参|起点|认购金额/],['duration',/存续期|存续期限|产品期限/],['lockup',/封闭期|锁定期|持有期/],['warning_stop',/预警|止损/],['investment_objective',/投资目标/],['investment_scope',/投资范围/],['investment_ratios',/投资比例/],['investment_restrictions',/投资限制/],['investment_strategy',/投资策略/]];
  return mappings.find(([,re])=>re.test(l))?.[0]||`custom:${l}`;
 }
 function cleanName(s){return s.replace(/^\s*(?:产品名称|产品全称|计划名称|基金名称|信托(?:计划)?名称|名称)\s*[：:|]?\s*/,'').replace(/^(?:指|即)[“"]?/,'').replace(/[。；;“”"].*$/,'').replace(/(?:资产管理合同|管理合同|信托合同|基金合同|合同)$/,'').trim();}
@@ -58,6 +58,7 @@ function pick(candidates,reason='自动核对未能确定此参数，请查看�
 function findMatches(rs,re,transform=(m)=>m[1],filter=()=>true){const out=[];for(const b of rs){if(!filter(b))continue;for(const m of b.text.matchAll(new RegExp(re.source,re.flags.includes('g')?re.flags:re.flags+'g'))){const v=transform(m,b);if(v!==null&&v!==undefined&&v!=='')out.push({value:String(v),evidence:[quote(b.base||b,b.text)]});}}return out;}
 function filtered(rs,scope){return rs.filter(b=>!/(?:假设示例|例如.{0,5}本产品|举例说明)/.test(b.text)&&(!scope.share||!/[A-Z]类/.test(b.text)||b.text.includes(scope.share+'类')));}
 const FEE_LABELS=[['trust_total_fee',/固定信托管理费|固定管理费/],['trust_manager_fee',/受托人信托报酬|(?:收取)?信托管理费|受托人报酬/],['floating_advisor_fee',/浮动投资顾问费/],['floating_sales_fee',/浮动销售服务费/],['advisor_fee',/固定投资顾问费|投资顾问费/],['sales_fee',/固定销售服务费|销售服务费/],['custody_fee',/托管费(?:率)?|保管费(?:率)?/],['management_fee',/管理费(?:率)?/],['redemption_fee',/赎回费(?:率)?|退出费(?:率)?/],['subscription_fee',/认[、/／]?申购(?:费|费用)|认购(?:费|费用)|申购(?:费|费用)|参与费(?:率)?/]];
+const AGGREGATE_LAYERS=/(?:两层|双层|上下两层).{0,8}(?:合计|总计|总费|综合)|(?:合计|总计).{0,5}(?:两层|双层)/;
 function feeTokens(text,baseKey,trust){
  const tokens=[];for(const m of text.matchAll(PERCENT)){
   const before=text.slice(Math.max(0,m.index-100),m.index);const hits=[];
@@ -108,19 +109,19 @@ function resolveAtom(key,label,rs,scope,target,extra={}){
  }
  if(key==='risk_rating'){
  const re=/(?:风险等级|风险评级|产品评级|评级)[^。；;\nR]{0,45}(R[1-5])(?:[（(]([^）)]*风险)[）)])?/g;
-  const issuerMatches=b=>scope.issuer==='distributor'?/(?:销售机构|代销机构|销售银行)[^。；;\n]{0,30}(?:风险等级|风险评级|评级|评定)/.test(b.text):!/^(?:销售机构|代销机构|销售银行)/.test(b.text);
-  const result=findMatches(allowed,re,m=>m[1],issuerMatches);
-  if(!result.length)result.push(...findMatches(allowed,/(?:风险等级|风险评级)[^。；;\n]{0,15}?(中低风险|中高风险|中风险|低风险|高风险)/g,m=>({'低风险':'R1','中低风险':'R2','中风险':'R3','中高风险':'R4','高风险':'R5'})[m[1]],issuerMatches));
+  const issuerMatches=(m,b)=>{const start=Math.max(b.text.lastIndexOf('\n',m.index-1),b.text.lastIndexOf('。',m.index-1),b.text.lastIndexOf('；',m.index-1),b.text.lastIndexOf(';',m.index-1))+1;const context=b.text.slice(start,m.index+m[0].length),distributor=/(?:销售机构|代销机构|销售银行)[^。；;\n]{0,30}(?:风险等级|风险评级|评级|评定)/.test(context);return scope.issuer==='distributor'?distributor:!distributor;};
+  const result=findMatches(allowed,re,(m,b)=>issuerMatches(m,b)?m[1]:null);
+  if(!result.length)result.push(...findMatches(allowed,/(?:风险等级|风险评级)[^。；;\n]{0,15}?(中低风险|中高风险|中风险|低风险|高风险)/g,(m,b)=>issuerMatches(m,b)?({'低风险':'R1','中低风险':'R2','中风险':'R3','中高风险':'R4','高风险':'R5'})[m[1]]:null));
   return pick(result,'合同未提供该评级主体的明确评级，保留待核。');
  }
  if(['manager','custodian','advisor','distributor'].includes(key)){
-  const a={manager:'(?:资产管理人|基金管理人|集合管理人|产品管理人|管理人|受托人)',custodian:'(?:集合托管人|资产托管人|托管人|保管人|保管银行|托管行)',advisor:'投资顾问',distributor:'(?:销售机构|代销机构|代理推介机构)'}[key];
+  const a={manager:'(?:资产管理人|基金管理人|集合管理人|产品管理人|管理人|受托人)',custodian:'(?:集合托管人|资产托管人|托管人|保管人|保管银行|托管行|保管行)',advisor:'投资顾问',distributor:'(?:销售机构|代销机构|代理推介机构)'}[key];
   const org='([\\u4e00-\\u9fffA-Za-z]{2,65}?(?:有限责任公司|股份有限公司|有限公司)(?:[\\u4e00-\\u9fff]{0,20}分行)?)';
   let cs=findMatches(allowed,new RegExp(a+'(?:名称)?(?:(?:[：:|\\s—/]+)(?:指)?|指)[【“]?'+org),m=>m[1].trim(),b=>b.text.length<600);
   cs=cs.filter(c=>!/(?:履行|应当|负责|根据|聘请|担任|作为|指定)/.test(c.value));
   return pick(cs);
  }
- if(key==='product_type')return pick(findMatches(allowed,/(?:归属于|类型为|类别为|产品类型[：:|]?|本计划为|集合计划为|类型\s*[:：]?|^)[【\s]*((?:固定收益|混合|权益|商品及金融衍生品)类)/g));
+ if(key==='product_type')return pick(findMatches(allowed,/(?:归属于|类型为|类别为|产品类型[：:|]?|本计划为|集合计划为|类型\s*[:：]?)[【\s]*((?:固定收益|混合|权益|商品及金融衍生品)类)/g));
  if(key==='product_code')return pick(findMatches(allowed,/(?:产品代码|产品编码)[：:|\s【（(]*([A-Z0-9]{5,25})/g));
  if(key==='opening_weekday')return pick(findMatches(allowed,/(?:每周|每星期)([一二三四五六日天])(?:[、和及][一二三四五六日天])?/g,m=>m[1],b=>/开放日|开放安排|开放期/.test(b.text)&&!/披露|估值/.test(b.text)));
  if(key==='opening_monthday')return pick(findMatches(allowed,/(?:每个?自然月|每月)(?:的)?[【\s]*(\d{1,2})[】\s]*日/g,m=>m[1],b=>/开放/.test(b.text)));
@@ -145,11 +146,26 @@ function resolveAtom(key,label,rs,scope,target,extra={}){
  }
  const result=pick(candidates,'自动核对未能确定对应的完整表述；请查看合同候选条款，原文保留待核。');if(result.status!=='verified'&&!result.evidence.length&&extra.original)result.evidence=nearbyEvidence(extra.original,allowed);return result;
 }
+function knownCellLabel(text){const value=text.trim();return value.length>0&&value.length<24&&!/[\d%％。；;]/.test(value)&&!keyFor(value).startsWith('custom:');}
+function fieldRows(row){
+ // Office merges retain empty physical cells. Pair only evidenced short labels
+ // with their value cells. A value can resemble a label (e.g. 开放式), so only
+ // the label positions establish pairing. Ambiguous grids stay pending.
+ let cells=(row.cells||[]).filter(c=>c.text.trim());
+ if(cells.length%2===1&&keyFor(cells[0]?.text)==='fees'&&knownCellLabel(cells[1]?.text||''))cells=cells.slice(1);
+ if(cells.length<2||cells.length%2||!cells.every((c,i)=>i%2||knownCellLabel(c.text)))return cells.length>2?[{...row,manualReviewReason:'多栏要素的标签与内容尚不能可靠配对，保留各单元格原值待核。'}]:[row];
+ const rows=[];for(let i=0;i<cells.length;i+=2){const pair=cells.slice(i,i+2);rows.push({...row,id:row.id+'-field-'+i,label:pair[0].text.trim(),value:pair[1].text,cells:pair,paragraphIds:pair.flatMap(c=>c.paragraphIds||[])});}return rows;
+}
+function performanceColumns(rows){
+ // Column headings identify a performance matrix. Words such as 成立日 or
+ // 收益率 inside ordinary terms do not make a multicolumn element table one.
+ return rows.some(row=>{const cells=(row.cells||[]).map(c=>c.text.trim()).filter(Boolean);return cells.length>=3&&cells.filter(t=>t.length<=24&&!/[。；;，,%％]/.test(t)&&/成立(?:日期|时间|以来)|(?:单位|累计)?净值|收益率|回报率|夏普|波动率|回撤/.test(t)).length>=2;});
+}
 function getRows(template,target){
  const byTable=new Map();for(const r of template.rows||[]){const k=r.part+'|'+r.tableId;if(!byTable.has(k))byTable.set(k,[]);byTable.get(k).push(r);}
- const groups=[...byTable.values()].map(rows=>({rows,page:rows[0].page,part:rows[0].part,name:rows.find(r=>NAME_LABEL.test(labelNorm(r.label)))?.value.trim()||'',fields:rows.filter(r=>!keyFor(r.label).startsWith('custom:')).length}));
+ const groups=[...byTable.values()].map(raw=>{const rows=raw.flatMap(fieldRows);return{rows,page:rows[0].page,part:rows[0].part,name:rows.find(r=>NAME_LABEL.test(labelNorm(r.label)))?.value.trim()||'',fields:rows.filter(r=>!keyFor(r.label).startsWith('custom:')).length,performance:performanceColumns(raw)};});
  const legalType=/信托/.test(target.name)?'trust':'asset';
- const good=groups.filter(g=>(g.fields>=2||g.name&&g.rows.length>=2)&&!MARKETING.test(template.slides?.find(s=>s.page===g.page)?.title||'')&&!g.rows.some(r=>(r.cells?.length||0)>3&&/成立|净值|收益/.test(r.value))&&(!g.name||(legalType==='trust'?/信托/.test(g.name):!/信托计划/.test(g.name))));
+ const good=groups.filter(g=>(g.fields>=2||g.name&&g.rows.length>=2)&&!MARKETING.test(template.slides?.find(s=>s.page===g.page)?.title||'')&&!g.performance&&(!g.name||(legalType==='trust'?/信托/.test(g.name):!/信托计划/.test(g.name))));
  let first=good.find(g=>g.name&&ELEMENT.test(template.slides?.find(s=>s.page===g.page)?.title||'')&&!UNDERLYING.test(template.slides?.find(s=>s.page===g.page)?.title||''))||good.find(g=>g.name&&!/底层|标的/.test(g.name));
  if(!first)first=good[0];
  const selected=[];let lastPage=null;
@@ -189,14 +205,14 @@ function atomsFor(label,text,target,fieldText=text){
  const trust=/信托/.test(target.name);
  if(key==='product_name')return[{key,start:0,before:text,value:text}];
  if(['manager','custodian','advisor','distributor','product_code'].includes(key))return[{key,start:0,before:text,value:text}];
- if(key==='product_type'){const m=text.match(/(?:固定收益|混合|权益|商品及金融衍生品)类/);return m?[{key,start:m.index,before:m[0],value:m[0]}]:[{key,start:0,before:text,value:text}];}
+ if(key==='product_type'){const m=text.match(/(?:固定收益|混合|权益|商品及金融衍生品)类/);return m?[{key,start:m.index,before:m[0],value:m[0]}]:[{key:'custom:product_type_wording',start:0,before:text,value:text,manualReviewReason:'模板此处未明确资产类别，可能描述运作方式或其他分类；保留原表述，不能直接替换为合同资产类别。'}];}
  if(key==='risk_rating'){
   for(const m of text.matchAll(/R[1-5]/g))add(key,m,m[0],m[0],{scope:scopeFor(label,text,m.index)});
   // Verbal ratings are separately tied to the same issuer, preserving layout and punctuation.
   for(const m of text.matchAll(/中低风险|中高风险|中风险|低风险|高风险/g))add('risk_description',m,m[0],m[0],{scope:scopeFor(label,text,m.index)});
   return atoms.length?atoms:[{key,start:0,before:text,value:text}];
  }
- if(['fees','management_fee','custody_fee','subscription_fee','redemption_fee'].includes(key)){const feeKey=/(?:参与|认.{0,5}购)[/／、及和].{0,4}(?:退出|赎回)/.test(label)?'subscription_redemption_fee':key;return feeTokens(text,feeKey,trust).map(t=>({...t,scope:scopeFor(label,text,t.start)}));}
+ if(['fees','management_fee','custody_fee','subscription_fee','redemption_fee'].includes(key)){const labeled=FEE_LABELS.find(([,re])=>new RegExp('^(?:'+re.source+')$').test(labelNorm(label)))?.[0];const feeKey=/(?:参与|认.{0,5}购)[/／、及和].{0,4}(?:退出|赎回)/.test(label)?'subscription_redemption_fee':labeled||key;return feeTokens(text,feeKey,trust).map(t=>({...t,scope:scopeFor(label,text,t.start)}));}
  if(key==='performance'){
   const matches=[...text.matchAll(PERCENT)],all=[...fieldText.matchAll(PERCENT)];const thresholds=unique(all.filter(m=>number(m[0])<15&&!/(提取|计提|收取|×)\s*$/.test(fieldText.slice(Math.max(0,m.index-15),m.index))).map(m=>number(m[0]))).sort((a,b)=>a-b);
   const ratios=unique(all.filter(m=>!thresholds.includes(number(m[0]))&&number(m[0])<100&&number(m[0])>0).map(m=>number(m[0]))).sort((a,b)=>a-b);
@@ -233,7 +249,8 @@ function renderRecord({m,field,p,atom,f}){
   let after=String(atom.renderValue??f.value??'');if(atom.key==='product_name')after=nameStyle(after,atom.before);if(atom.key==='risk_description')after=({R1:'低风险',R2:'中低风险',R3:'中风险',R4:'中高风险',R5:'高风险'})[after]||after;
   if(atom.key==='opening_days'&&/^[一二两三四五六七八九十]$/.test(atom.before))after=Object.entries({一:1,二:2,三:3,四:4,五:5,六:6,七:7,八:8,九:9,十:10}).find(([,v])=>v===Number(after))?.[0]||after;
   if(equivalent(atom.value,after))return;
-  if(/^\d+(?:\.\d+)?%$/.test(after)&&/^\d+(?:\.\d+)?%$/.test(atom.before)){const decimals=atom.before.split('.')[1]?.replace('%','').length||0;const needed=after.split('.')[1]?.replace('%','').length||0;after=number(after).toFixed(Math.max(decimals,needed))+'%';}
+  const percentage=atom.before.match(/^(\d+(?:\.(\d+))?)(\s*[】\]]?\s*[%％])$/);
+  if(/^\d+(?:\.\d+)?%$/.test(after)&&percentage){const decimals=percentage[2]?.length||0,needed=after.split('.')[1]?.replace('%','').length||0;after=number(after).toFixed(Math.max(decimals,needed))+percentage[3];}
   const diff=atom.before.length<35&&!['product_name','manager','custodian','advisor','distributor'].includes(atom.key)?{start:0,before:atom.before,after}:minimalChange(atom.before,after);if(!diff.before&&!diff.after)return;
   m.operations.push({...common,id:'op-'+m.operations.length,kind:'replace',start:atom.start+diff.start,before:diff.before,after:diff.after});
  }else{
@@ -244,14 +261,17 @@ function renderRecord({m,field,p,atom,f}){
  }
 }
 function reviewParagraph(task,m,field,p,rs){
- const atoms=atomsFor(field.label,p.text,task.target,keyFor(field.label)==='performance'?m._performanceText:field.before);
- for(const atom of atoms){let resolution;
-  if(atom.key==='warning_stop'){
+ const atoms=field.manualReviewReason?[{key:'custom:table_layout:'+labelNorm(field.label),start:0,before:p.text,value:p.text,manualReviewReason:field.manualReviewReason}]:atomsFor(field.label,p.text,task.target,keyFor(field.label)==='performance'?m._performanceText:field.before);
+ for(const atom of atoms){let resolution;const aggregate=(atom.key.endsWith('_fee')||atom.key.startsWith('performance_'))&&AGGREGATE_LAYERS.test(field.label+' '+field.before);
+  if(aggregate)atom.scope={...(atom.scope||scopeFor(field.label,p.text,atom.start)),condition:'aggregate_layers'};
+  if(atom.manualReviewReason)resolution={status:'pending',value:null,evidence:[],reasonType:'needs_review',reason:atom.manualReviewReason};
+  else if(atom.key==='warning_stop'){
    const a=resolveAtom('warning_line',field.label,rs,{},task.target),b=resolveAtom('stop_line',field.label,rs,{},task.target);
    resolution=a.status==='verified'&&b.status==='verified'?{status:'verified',value:`预警线${a.value}，止损线${b.value}`,evidence:[...a.evidence,...b.evidence],reason:'合同明确设置预警线和止损线。'}:resolveAtom(atom.key,field.label,rs,{},task.target,{original:p.text});
   }else if(atom.key==='risk_description')resolution=resolveAtom('risk_rating',field.label,rs,atom.scope,task.target);
   else if(atom.key==='opening_announced_date')resolution={status:'pending',value:null,evidence:[],reasonType:'contract_missing',reason:'该具体开放日期需当期公告支持，合同周期不能确认具体公告日期。'};
   else resolution=resolveAtom(atom.key,field.label,rs,atom.scope||scopeFor(field.label,p.text,atom.start),task.target,{original:atom.before});
+  if(aggregate&&!(resolution.status==='verified'&&resolution.evidence?.length&&resolution.evidence.every(e=>AGGREGATE_LAYERS.test(e.quote))))resolution={...resolution,status:'pending',value:null,reasonType:'needs_review',reason:'模板列示跨层合计费用，尚未取得同口径的合同依据，保留原值待核。'};
   // Retain a documented successor organization alias in the template.
   if(atom.key==='manager'&&resolution.status==='verified'&&!equivalent(atom.before,resolution.value)){
    const docs=task.templates.flatMap(t=>t.paragraphs.map(p=>p.text)).join('\n');const old=esc(resolution.value.trim()),newName=atom.before.trim();
@@ -283,7 +303,7 @@ export function analyzeMaterials(contract,templates,{now,month}={}){
   if(!rows.length)m.warnings.push('尚未识别到可可靠定位的产品要素区，需检查模板结构。');
   const map=new Map(t.paragraphs.map(p=>[p.id,p]));const selectedIds=new Set();
   for(const row of rows){
-   const ps=fieldParagraphs(row,map);ps.forEach(p=>selectedIds.add(p.id));const field={id:`${t.id}-field-${m.fields.length+1}`,label:row.label,status:'pending',before:ps.map(p=>p.text).join('\n'),after:'',factIds:[],paragraphIds:ps.map(p=>p.id),reason:''};m.fields.push(field);
+   const ps=fieldParagraphs(row,map);ps.forEach(p=>selectedIds.add(p.id));const field={id:`${t.id}-field-${m.fields.length+1}`,label:row.label,status:'pending',before:ps.map(p=>p.text).join('\n'),after:'',factIds:[],paragraphIds:ps.map(p=>p.id),reason:'',manualReviewReason:row.manualReviewReason};m.fields.push(field);
    for(const p of ps)if(p.text.trim())reviewParagraph(task,m,field,p,rs);
   }
   // Direct identity repeats are safe only in title/disclosure text, never performance prose or peer tables.
@@ -301,6 +321,8 @@ export function analyzeMaterials(contract,templates,{now,month}={}){
    if(identitySource&&p.text.length<150){const full=new RegExp(PRODUCT_END+'$').test(identitySource);const to=full?target.name:target.shortName;const start=p.text.indexOf(identitySource);const f={id:`${t.id}-field-${m.fields.length+1}`,label:'产品名称',before:p.text,after:'',factIds:[],paragraphIds:[p.id],status:'pending'};m.fields.push(f);addOccurrence(task,m,f,p,{key:'product_name',start,before:identitySource,value:identitySource,renderValue:to},{status:'verified',value:target.name,evidence:target.evidence,reason:'同步产品标题中的名称。'});}
    if(/(?:本(?:集合|信托)?计划|本产品|管理人).{0,30}(?:风险等级|风险评级|评级)/.test(p.text)&&/R[1-5]/.test(p.text)){const f={id:`${t.id}-field-${m.fields.length+1}`,label:'风险等级',before:p.text,after:'',factIds:[],paragraphIds:[p.id],status:'pending'};m.fields.push(f);reviewParagraph(task,m,f,p,rs);}
   }
+  m.productElementsLocated=m.fields.some(f=>f.source!=='company');
+  if(!m.productElementsLocated)m.warnings.push('未定位到可更新的产品要素，无法完成该模板的产品要素更新；其他模板可以继续处理。');
  }
  return finalize(task);
 }

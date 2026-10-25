@@ -248,6 +248,35 @@ export async function addPptComment(pkg, entry, state, timestamp) {
   return {commentId:idx,commentPart:part,authorId:state.id,anchorKind:'slidePosition',anchorText:op.before};
 }
 
+async function trimSlideNavigation(pkg, owner, rels, excluded) {
+  const removed=new Set();
+  if(!owner.endsWith('.xml'))return removed;
+  const doc=await pkg.xml(owner);
+  const isNavigation=node=>tag(node,NS.a,'hlinkClick')||tag(node,NS.a,'hlinkMouseOver');
+  const relative=elements(doc,NS.a,'*').filter(node=>isNavigation(node)&&(node.getAttribute('action')||'').startsWith('ppaction://hlinkshowjump'));
+  for(const node of relative)node.parentNode.removeChild(node);
+  if(relative.length){
+    pkg.mark(owner);
+    pkg.repairs.push({kind:'removedRelativeNavigation',part:owner,removedCount:relative.length,message:`仅输出产品要素页，已移除 ${relative.length} 个可能因删页改变目标的相对翻页动作；原文字和图形保留。`});
+  }
+  for(const rel of rels.nodes){
+    if(rel.getAttribute('TargetMode')==='External')continue;
+    const target=resolveTarget(owner,rel.getAttribute('Target'));
+    if(!excluded.has(target))continue;
+    const id=rel.getAttribute('Id'),references=[];
+    for(const node of [doc.documentElement,...elements(doc,'*','*')])for(const attr of Array.from(node.attributes||[]))if(attr.namespaceURI===R&&attr.value===id)references.push({node,attr});
+    // Only navigation is optional. A resource/object reference must still fail
+    // if removing a slide would make it incomplete.
+    if(![`${R}/slide`,`${R}/hyperlink`].includes(rel.getAttribute('Type'))||references.some(({node,attr})=>!isNavigation(node)||attr.localName!=='id'))continue;
+    const actions=new Set(references.map(r=>r.node));
+    for(const node of actions)node.parentNode.removeChild(node);
+    rels.doc.documentElement.removeChild(rel);removed.add(id);pkg.mark(rels.name);
+    if(actions.size)pkg.mark(owner);
+    pkg.repairs.push({kind:'removedSlideNavigation',part:owner,target,removedCount:actions.size,relationshipId:id,message:actions.size?`已移除 ${actions.size} 个指向未交付页面的点击／悬停跳转；原文字和图形保留。`:'已清理指向未交付页面的未使用跳转关系。'});
+  }
+  return removed;
+}
+
 export async function subsetPresentation(pkg, selectedPages) {
   const order=await presentationOrder(pkg),count=order.slides.length;
   if(!Array.isArray(selectedPages)||!selectedPages.length||selectedPages.some((n,i)=>!Number.isInteger(n)||n<1||n>count||(i&&n<=selectedPages[i-1])))fail('PPT 交付页必须是原文件中按顺序排列、无重复的有效页码。');
@@ -268,8 +297,10 @@ export async function subsetPresentation(pkg, selectedPages) {
   while(pending.length){
     const owner=pending.pop();if(visited.has(owner))continue;visited.add(owner);
     if(owner){if(excluded.has(owner))fail(`内部链接指向已排除页面：${owner}`);if(!pkg.has(owner))fail(`内部链接目标缺失：${owner}`);reachable.add(owner);}
-    const rels=await pkg.relationships(owner);if(!rels.doc)continue;reachable.add(rels.name);
+    const rels=await pkg.relationships(owner),removedNavigation=subset?await trimSlideNavigation(pkg,owner,rels,excluded):new Set();
+    if(!rels.doc)continue;reachable.add(rels.name);
     for(const rel of rels.nodes){
+      if(removedNavigation.has(rel.getAttribute('Id')))continue;
       if(subset&&rel.getAttribute('Type').endsWith('/thumbnail')){rels.doc.documentElement.removeChild(rel);pkg.mark(rels.name);continue;}
       if(rel.getAttribute('TargetMode')==='External')continue;
       const target=resolveTarget(owner,rel.getAttribute('Target'));
@@ -277,10 +308,6 @@ export async function subsetPresentation(pkg, selectedPages) {
       if(!pkg.has(target))fail(`文件内部链接目标缺失：${owner} → ${target}`);
       pending.push(target);
     }
-  }
-  if(subset)for(const slide of selected){
-    const doc=await pkg.xml(slide.part);
-    for(const node of elements(doc,'*','*'))if((node.getAttribute('action')||'').startsWith('ppaction://hlinkshowjump'))fail(`第 ${order.slides.indexOf(slide)+1} 页包含相对跳转，删页后目标可能变化，需人工处理。`);
   }
   const types=await pkg.xml('[Content_Types].xml');
   for(const node of children(types.documentElement,CT,'Override'))if(!reachable.has(decodeURIComponent(node.getAttribute('PartName')).replace(/^\//,''))){types.documentElement.removeChild(node);pkg.mark('[Content_Types].xml');}
