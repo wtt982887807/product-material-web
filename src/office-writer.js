@@ -1,5 +1,5 @@
 import {NS,parseXml,serializeXml,elements,children,textOf,sha256,isVisibleBranch} from './office-xml.js';
-import {deliveryName,currentMonth} from './naming.js';
+import {deliveryName,currentMonth,uniqueDeliveryNames} from './naming.js';
 import {OfficePackage,fail,tag,create,setW,directElements,allocateWordIds,wordCommentPart,enableWordTracking,repairPptCommentAuthors,createPptCommentState,addPptComment,subsetPresentation,presentationOrder,validatePackage} from './office-package.js';
 
 const AUTHOR='产品要素核对';
@@ -266,6 +266,6 @@ export async function writeTask(task) {
   if(!task||!Array.isArray(task.materials)||!task.materials.length)fail('没有可生成的物料。');
   const files=[];
   for(const material of task.materials)files.push(await writeMaterial(material,{month:task.month,targetName:task.target?.name,now:task.now||new Date()}));
-  const names=new Set();for(const file of files){if(names.has(file.name))fail(`生成文件名称重复：${file.name}。请先调整模板名称。`);names.add(file.name);}
+  const names=uniqueDeliveryNames(files.map(file=>file.name));files.forEach((file,index)=>{file.name=names[index];});
   return {files,report:{fileCount:files.length,structuralValidation:true,businessVerified:files.every(f=>f.report.businessVerified),files:files.map(f=>({name:f.name,...f.report}))}};
 }

@@ -54,13 +54,20 @@ function abbreviatedTarget(target, source) {
   // When both issuer and series differ, do not invent which new words to omit.
   return target;
 }
+function productRange(stem, candidate) {
+  const match=normalizedRange(stem,candidate);
+  // A matched product cannot justify a trailing old phase or placeholder.
+  // Only non-product delivery suffixes can survive replacement.
+  const header=stem.match(/^(?:\s*【[^】]*】\s*)*/u)[0];
+  return match&&!stem.slice(header.length,match.start).trim()&&!short(stem.slice(match.end).trim().replace(/(?:产品要素)+$/u,''))?match:null;
+}
 function updateProduct(stem, targetName, templateProductName) {
   const target=short(targetName), old=short(templateProductName);
   if(!target) throw new Error('合同尚未确定产品名称，不能生成文件名');
-  for(const t of [target,omitParenthetical(target)]) if(normalizedRange(stem,t)) return stem;
+  for(const t of [target,omitParenthetical(target)]) if(productRange(stem,t)) return stem;
   for(const omitted of [false,true]) {
     const candidate=omitted?omitParenthetical(old):old;
-    const match=normalizedRange(stem,candidate);
+    const match=productRange(stem,candidate);
     if(match) return stem.slice(0,match.start)+targetWithSameStyle(target,stem.slice(match.start,match.end),omitted)+stem.slice(match.end);
   }
   for(const omitted of [false,true]) {
@@ -71,21 +78,22 @@ function updateProduct(stem, targetName, templateProductName) {
     }
   }
   for(const candidate of [target,omitParenthetical(target)])if(filenameAbbreviation(stem,candidate))return stem;
-  // A generic template filename may not contain a product name at all.
-  if(!/[\d一二三四五六七八九十]+号/.test(stem)) return stem+' '+target;
-  throw new Error('文件名中的原产品名称无法对应所选模板，请检查模板主体：'+stem);
+  // Filenames are presentation, not an identity gate. Unknown aliases, old
+  // numbers and phase placeholders are replaced together by the contract name.
+  const header=stem.match(/^(?:\s*【[^】]*】\s*)*/u)[0];
+  return header+target;
 }
 function updateMonth(stem, month) {
   const month6=/(?<!\d)20\d{2}(?:0[1-9]|1[0-2])(?!\d)/g;
   const month4=/(?<!\d)\d{2}(?:0[1-9]|1[0-2])(?!\d)/g;
   let found=false;
-  let result=stem.replace(/【([^】]*)】/,(_whole,prefix)=>{
+  let result=stem.replace(/【([^】]*)】/g,(_whole,prefix)=>{
     if(month6.test(prefix)) {month6.lastIndex=0;found=true;return '【'+prefix.replace(month6,month)+'】';}
     month6.lastIndex=0;
     if(month4.test(prefix)) {month4.lastIndex=0;found=true;return '【'+prefix.replace(month4,month.slice(2))+'】';}
-    month4.lastIndex=0;found=true;return '【'+prefix+' '+month+'】';
+    month4.lastIndex=0;return _whole;
   });
-  if(!found) result='【'+month+'】'+result;
+  if(!found) result=/【[^】]*】/.test(result)?result.replace(/【([^】]*)】/,(_whole,prefix)=>'【'+prefix+' '+month+'】'):'【'+month+'】'+result;
   return result;
 }
 export function deliveryName(originalName,{targetName,templateProductName='',kind,month=currentMonth()}={}) {
@@ -97,4 +105,19 @@ export function deliveryName(originalName,{targetName,templateProductName='',kin
   stem=updateMonth(stem,month);
   if(kind==='ppt') stem=stem.replace(/(?:产品要素)+$/,'')+'产品要素';
   return stem+match[2].toLowerCase();
+}
+
+/** Keep previews, individual links and ZIP entries unique on Windows as well. */
+export function uniqueDeliveryNames(names) {
+  const key=name=>name.normalize('NFC').toLowerCase();
+  const reserved=new Set(names.map(key)),used=new Set();
+  return names.map(name=>{
+    let result=name;
+    if(used.has(key(result))){
+      const dot=name.lastIndexOf('.'),stem=dot<0?name:name.slice(0,dot),ext=dot<0?'':name.slice(dot);
+      let count=2;
+      do{result=`${stem}（${count++}）${ext}`;}while(used.has(key(result))||reserved.has(key(result)));
+    }
+    used.add(key(result));return result;
+  });
 }
