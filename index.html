@@ -8,7 +8,7 @@
 <body>
   <header class="topbar"><a class="brand" href="./" aria-label="产品要素工作台首页"><span class="brand-mark">P</span><span>产品要素工作台<small>PRODUCT MATERIALS</small></span></a><div class="top-meta"><span class="local-dot"></span>文件在本机处理<a href="https://github.com/wtt982887807/product-material-web" target="_blank" rel="noopener">使用说明 ↗</a></div></header>
   <main>
-    <section class="intro"><div><p class="eyebrow">合同为依据 · 模板为底稿</p><h1>更新要素，保留你的表达。</h1><p class="intro-copy">上传合同和近似产品模板。共同要素统一核对，差异局部修改，未确定的参数保留原值供审阅。</p></div><div class="month-card"><span>本次制作月份</span><strong id="month-value">—</strong><small>用于输出文件名</small></div></section>
+    <section class="intro"><div><p class="eyebrow">合同为依据 · 模板为底稿</p><h1>更新要素，保留你的表达。</h1><p class="intro-copy">上传合同和近似产品模板。共同要素统一核对，差异局部修改，未确定的参数保留原值供审阅。</p></div><div class="month-card"><label for="month-value">本次制作月份</label><input id="month-value" type="month" min="2000-01" max="2099-12" required aria-label="本次制作月份"><small>用于输出文件名和下载包</small><button class="text-button" id="month-reset" type="button">恢复当月</button></div></section>
     <ol class="steps" aria-label="处理步骤"><li class="active" id="step-upload"><b>01</b> 选择文件</li><li id="step-review"><b>02</b> 核对要素</li><li id="step-download"><b>03</b> 下载物料</li></ol>
     <section class="workspace" id="upload-section">
       <div class="section-heading"><div><h2>准备这次的文件</h2><p>一份目标产品合同，以及至少一份模板。</p></div><span class="section-note">模板可与合同产品不同名</span></div>
@@ -16,7 +16,8 @@
         <div class="upload-card contract-card" id="contract-drop"><div class="file-icon">合同</div><h3>目标产品合同 <span class="required">必选</span></h3><p>DOCX / DOC · 仅选一份</p><label class="file-button" for="contract-input">选择合同</label><input id="contract-input" type="file" accept=".docx,.doc"><div class="file-list" id="contract-files" aria-live="polite"></div></div>
         <div class="upload-card" id="templates-drop"><div class="file-icon light">模板</div><h3>要更新的物料 <span class="required">至少一份</span></h3><p>PPT、一页通或海报 · DOCX / PPTX</p><label class="file-button secondary" for="templates-input">选择模板，可多选</label><input id="templates-input" type="file" accept=".docx,.pptx" multiple><div class="file-list" id="template-files" aria-live="polite"></div></div>
       </div>
-      <div class="scope-note"><strong>本次只更新产品要素</strong><span>营销图文、历史业绩及人员介绍保持原样。PPT只输出自身要素页及续页，Word保留本轮修订。</span></div>
+      <section class="company-upload" id="company-drop" aria-labelledby="company-heading"><div><h3 id="company-heading">一页通公司介绍 <span class="required">可选 · 仅用于 Word</span></h3><p>上传最新 DOCX，匹配两种公司介绍版式并以修订模式更新。本浏览器会记住最近一次有效版本。</p><p id="company-status" class="company-status" aria-live="polite">正在读取本机保存的版本…</p></div><div class="company-actions"><label class="file-button secondary" for="company-input">上传最新公司介绍</label><input id="company-input" type="file" accept=".docx"><button class="text-button" id="company-clear" type="button" hidden>清除已保存版本</button></div></section>
+      <div class="scope-note"><strong>更新范围</strong><span>产品要素＋一页通匹配到的公司介绍。海报和PPT不更新公司介绍；历史业绩及人员介绍保持原样。</span></div>
       <div class="action-row"><p id="selection-hint">选好文件后，开始核对。</p><button class="primary-button" id="analyze-button" disabled>开始核对 <span>→</span></button></div>
     </section>
     <section class="progress-panel" id="progress-panel" hidden aria-live="polite"><div class="spinner"></div><div><strong id="progress-title">正在读取文件</strong><p id="progress-detail">共同要素只核对一次。</p></div></section>
@@ -29,7 +30,7 @@
     </section>
     <section class="how-it-works"><div><span>01</span><strong>同一事实，统一核对</strong><p>保留各模板自己的句式与位置。</p></div><div><span>02</span><strong>缺项保留，局部标黄</strong><p>不把旧值删成整段“待补充”。</p></div><div><span>03</span><strong>产品更新，月份自动</strong><p>制作月份只用于文件命名。</p></div></section>
   </main>
-  <footer><span>产品要素工作台 · 本地文件处理</span><span>合同与模板不会上传到网站服务器。</span></footer>
+  <footer><span>产品要素工作台 · 本地文件处理</span><span>文件不上传服务器；公司介绍仅保存在当前浏览器。</span></footer>
   <script src="vendor/jszip.min.js"></script><script src="vendor/docToText.js"></script><script type="module" src="src/app.js"></script>
 </body>
 </html>
