@@ -14,9 +14,10 @@
       <div class="section-heading"><div><h2>准备这次的文件</h2><p>一份目标产品合同，以及至少一份模板。</p></div><span class="section-note">模板可与合同产品不同名</span></div>
       <div class="upload-grid">
         <div class="upload-card contract-card" id="contract-drop"><div class="file-icon">合同</div><h3>目标产品合同 <span class="required">必选</span></h3><p>DOCX / DOC · 仅选一份</p><label class="file-button" for="contract-input">选择合同</label><input id="contract-input" type="file" accept=".docx,.doc"><div class="file-list" id="contract-files" aria-live="polite"></div></div>
-        <div class="upload-card" id="templates-drop"><div class="file-icon light">模板</div><h3>要更新的物料 <span class="required">至少一份</span></h3><p>PPT、一页通或海报 · DOCX / PPTX</p><label class="file-button secondary" for="templates-input">选择模板，可多选</label><input id="templates-input" type="file" accept=".docx,.pptx" multiple><div class="file-list" id="template-files" aria-live="polite"></div></div>
+        <div class="upload-card" id="templates-drop"><div class="file-icon light">模板</div><h3>要更新的物料 <span class="required">至少一份</span></h3><p>PPT、一页通或海报 · DOCX / DOC / RTF / PPTX</p><label class="file-button secondary" for="templates-input">选择模板，可多选</label><input id="templates-input" type="file" accept=".docx,.doc,.rtf,.pptx" multiple><div class="file-list" id="template-files" aria-live="polite"></div></div>
       </div>
-      <section class="company-upload" id="company-drop" aria-labelledby="company-heading"><div><h3 id="company-heading">一页通公司介绍 <span class="required">可选 · 仅用于 Word</span></h3><p>上传最新 DOCX，匹配两种公司介绍版式并以修订模式更新。本浏览器会记住最近一次有效版本。</p><p id="company-status" class="company-status" aria-live="polite">正在读取本机保存的版本…</p></div><div class="company-actions"><label class="file-button secondary" for="company-input">上传最新公司介绍</label><input id="company-input" type="file" accept=".docx"><button class="text-button" id="company-clear" type="button" hidden>清除已保存版本</button></div></section>
+      <section class="company-upload" id="company-drop" aria-labelledby="company-heading"><div><h3 id="company-heading">一页通公司介绍 <span class="required">可选 · 仅用于 Word</span></h3><p>已内置 2026.10 版的两种介绍形式，无需重复上传。上传新版后，本浏览器会自动沿用新版。</p><p id="company-status" class="company-status" aria-live="polite">正在准备公司介绍…</p></div><div class="company-actions"><label class="file-button secondary" for="company-input">上传最新公司介绍</label><input id="company-input" type="file" accept=".docx"><button class="text-button" id="company-clear" type="button" hidden>恢复网页内置版本</button></div></section>
+      <p class="preparation-note">Word 模板会先自动接受旧修订；旧版 DOC / RTF 自动转换成 DOCX，再进行本轮审阅修改。</p>
       <div class="scope-note"><strong>更新范围</strong><span>产品要素＋一页通匹配到的公司介绍。海报和PPT不更新公司介绍；历史业绩及人员介绍保持原样。</span></div>
       <div class="action-row"><p id="selection-hint">选好文件后，开始核对。</p><button class="primary-button" id="analyze-button" disabled>开始核对 <span>→</span></button></div>
     </section>
@@ -30,7 +31,7 @@
     </section>
     <section class="how-it-works"><div><span>01</span><strong>同一事实，统一核对</strong><p>保留各模板自己的句式与位置。</p></div><div><span>02</span><strong>缺项保留，局部标黄</strong><p>不把旧值删成整段“待补充”。</p></div><div><span>03</span><strong>产品更新，月份自动</strong><p>制作月份只用于文件命名。</p></div></section>
   </main>
-  <footer><span>产品要素工作台 · 本地文件处理</span><span>文件不上传服务器；公司介绍仅保存在当前浏览器。</span></footer>
-  <script src="vendor/jszip.min.js"></script><script src="vendor/docToText.js"></script><script type="module" src="src/app.js"></script>
+  <footer><span>产品要素工作台 · 本地文件处理</span><span>合同和模板在本机处理；网页自带公司介绍，可上传新版覆盖。</span></footer>
+  <script src="vendor/jszip.min.js"></script><script src="vendor/docToText.js"></script><script type="module" src="src/bootstrap.js"></script>
 </body>
 </html>
