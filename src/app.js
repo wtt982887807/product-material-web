@@ -6,7 +6,7 @@ const el=(tag,className,text)=>{const n=document.createElement(tag);if(className
 const readableSize=bytes=>bytes>=1048576?(bytes/1048576).toFixed(1)+' MB':Math.max(1,Math.round(bytes/1024))+' KB';
 const nextPaint=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
 function showError(error){$('error-message').textContent=error?.message||String(error);$('error-panel').hidden=false;}
-function clearDownloads(){for(const url of state.urls)URL.revokeObjectURL(url);state.urls=[];$('download-list').replaceChildren();}
+function clearDownloads(){for(const url of state.urls)URL.revokeObjectURL(url);state.urls=[];$('download-list').replaceChildren();$('generation-status').hidden=true;$('generation-status').textContent='';}
 function changeStep(name){for(const key of ['upload','review','download']){$('step-'+key).classList.toggle('active',key===name);$('step-'+key).classList.toggle('done',name==='download'&&key!=='download'||name==='review'&&key==='upload');}}
 function updateMonth(reset=false){state.started=new Date();if(reset)state.manualMonth=undefined;state.month=resolveProductionMonth({manualValue:state.manualMonth,now:state.started});state.monthValid=true;$('month-value').value=monthInputValue(state.month);}
 function changeMonth(reset=false){
@@ -34,7 +34,18 @@ function showCompany(){
 }
 async function useDefaultCompany(){const {loadDefaultCompanyProfile}=await import('./default-company-profile.js');state.company=loadDefaultCompanyProfile();state.companyIsDefault=true;state.companyPersisted=false;}
 async function restoreCompany(){
- try{await useDefaultCompany();const {createProfileStore}=await import('./profile-store.js');state.store=createProfileStore();const record=await state.store.load();if(record){state.companyStored=true;const {parseCompanyProfile}=await import('./company-profile.js');const profile=await parseCompanyProfile({name:record.name,bytes:record.bytes});if(profile.sha256!==record.sha256)throw new Error('已保存的公司介绍校验不一致，请重新上传。');state.company=profile;state.companyIsDefault=false;state.companyPersisted=true;}}
+ try{
+  await useDefaultCompany();const {createProfileStore}=await import('./profile-store.js');state.store=createProfileStore();const record=await state.store.load();
+  if(record){
+   state.companyStored=true;const {parseCompanyProfile}=await import('./company-profile.js');const profile=await parseCompanyProfile({name:record.name,bytes:record.bytes});
+   if(profile.sha256!==record.sha256)throw new Error('已保存的公司介绍校验不一致，请重新上传。');
+   const {isSupersededCompanyProfile}=await import('./default-company-profile.js');
+   if(isSupersededCompanyProfile(profile)){
+    state.companyWarning='已自动采用规模日期更正后的公司介绍。';
+    try{state.companyStored=!await state.store.clearIfSha256(profile.sha256);}catch{state.companyWarning+='旧版本缓存暂未清除，但不会覆盖更正后的内置版本。';}
+   }else{state.company=profile;state.companyIsDefault=false;state.companyPersisted=true;}
+  }
+ }
  catch(error){if(error.code==='PROFILE_CACHE_INVALID')state.companyStored=true;state.companyWarning='未能恢复已保存版本：'+(error.message||String(error));}
  finally{state.companyReady=true;showCompany();refreshSelection();}
 }
@@ -112,17 +123,22 @@ function renderReview(){
  $('delivery-list').replaceChildren();for(const m of task.materials){const item=el('div','delivery-item');item.append(el('span','kind',({word:'WORD · 一页通',ppt:'PPT · 产品要素',poster:'PPT · 海报'})[m.kind]||'物料'),el('strong','',materialName(m)));const page=m.kind==='ppt'?`仅输出源第 ${(m.selectedPages||[]).join('、')} 页`:(m.kind==='poster'?'保留海报全部页面':'接受旧修订，保留本轮新修订');item.append(el('p','',page));$('delivery-list').append(item);}renderFacts();
 }
 document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{state.filter=b.dataset.filter;renderFacts();});
-function downloadLink(bytes,mime,name,parent,auto=false){const url=URL.createObjectURL(new Blob([bytes],{type:mime}));state.urls.push(url);const link=el('a','',name);link.href=url;link.download=name;parent.append(link);if(auto)link.click();return link;}
+function downloadLink(bytes,mime,name,parent){const url=URL.createObjectURL(new Blob([bytes],{type:mime}));state.urls.push(url);const link=el('a','',name);link.href=url;link.download=name;parent.append(link);return link;}
+function generationStatus(message,kind='progress'){const box=$('generation-status');box.hidden=false;box.dataset.kind=kind;box.textContent=message;}
 function reviewText(task,result){
  const lines=['物料审阅清单',`目标产品：${task.target.name}`,`制作月份：${task.month}`,`公司介绍：${state.company?.name||'未使用'}`,'','本次更新产品要素及匹配到的一页通公司介绍；历史业绩及人员介绍保持原样。','黄色表示原值仍需确认，不代表合同已核实。','','输出文件：',...result.files.map(f=>f.name),'','核对事项：'];
  for(const f of task.facts){lines.push(`${f.label}｜${f.status==='verified'?(f.source==='user'?'用户补充':f.source==='company'?'公司介绍依据':'合同核对'):'保留待核'}｜${f.value??'保留各模板原值'}`,f.reason||'');for(const e of(f.evidence||[]).slice(0,2))lines.push(sourceTitle(e)+'：'+e.quote);lines.push('');}
  return lines.join('\r\n');
 }
 $('generate-button').onclick=async()=>{
- if(!state.task||state.busy||!state.monthValid)return;setBusy(true);$('error-panel').hidden=true;clearDownloads();progress('正在生成物料','按已核对的差异回写，保留模板格式。');await nextPaint();
+ if(!state.task||state.busy||!state.monthValid)return;setBusy(true);$('error-panel').hidden=true;clearDownloads();generationStatus('正在生成物料，请稍候…');$('generate-button').textContent='正在生成…';await nextPaint();
  try{
-  const {writeTask}=await import('./office-writer.js');const result=await writeTask(state.task);const zip=new globalThis.JSZip();for(const file of result.files)zip.file(file.name,file.bytes);zip.file('审阅清单.txt','\uFEFF'+reviewText(state.task,result));const bundle=await zip.generateAsync({type:'uint8array',compression:'DEFLATE'});
-  const box=$('download-list');box.append(el('p','download-success',`已生成 ${result.files.length} 份物料，可下载审阅。`));downloadLink(bundle,'application/zip',`${state.task.target.shortName||'产品物料'}_${state.task.month}.zip`,box,true);for(const file of result.files)downloadLink(file.bytes,file.mime,file.name,box);changeStep('download');
- }catch(error){showError(error);}finally{setBusy(false);$('progress-panel').hidden=true;}
+  const {writeTask}=await import('./office-writer.js');const result=await writeTask(state.task);generationStatus(`已完成 ${result.files.length} 份物料，正在准备下载包…`);const zip=new globalThis.JSZip();for(const file of result.files)zip.file(file.name,file.bytes);zip.file('审阅清单.txt','\uFEFF'+reviewText(state.task,result));const bundle=await zip.generateAsync({type:'uint8array',compression:'DEFLATE'});
+  const box=$('download-list');box.append(el('p','download-success',`已生成 ${result.files.length} 份物料，可下载审阅。`));const bundleLink=downloadLink(bundle,'application/zip',`${state.task.target.shortName||'产品物料'}_${state.task.month}.zip`,box);for(const file of result.files)downloadLink(file.bytes,file.mime,file.name,box);changeStep('download');
+  generationStatus('已生成。若未自动开始下载，请点击下方下载包或单个文件。','success');box.scrollIntoView({block:'nearest'});
+  // A browser may decline an automatic download after asynchronous work. The
+  // visible direct links must remain usable regardless of that browser policy.
+  try{bundleLink.click();}catch{}
+ }catch(error){generationStatus('生成失败：'+(error.message||String(error)),'error');showError(error);}finally{setBusy(false);$('generate-button').textContent='生成并下载物料';$('progress-panel').hidden=true;}
 };
 updateMonth(true);refreshSelection();restoreCompany();
