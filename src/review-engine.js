@@ -370,7 +370,8 @@ function addOccurrence(task,m,field,p,atom,resolution){
  if(atom.key==='opening_announced_date'){scope.period='announcement';scope.condition=[atom.dateEvent,atom.dateRole,norm(atom.before)].join('|');}
  if(atom.key.startsWith('investment_')||atom.key.startsWith('custom:')||['opening','lockup','duration'].includes(atom.key))scope.condition=norm(atom.before);
  const factKey=(atom.key==='risk_description'?'risk_rating':atom.key)+'|'+JSON.stringify(scope);
- let f=task._factMap.get(factKey);if(!f){f={id:'fact-'+(task.facts.length+1),key:atom.key,label:field.label,value:resolution.value,status:resolution.status,evidence:resolution.evidence||[],scope,occurrences:[],reason:resolution.reason,reasonType:resolution.reasonType||(resolution.status==='verified'?'confirmed':'needs_review')};task.facts.push(f);task._factMap.set(factKey,f);}
+ const factLabel=atom.key.startsWith('performance_ratio_')?'业绩报酬提成比例（第'+atom.key.match(/\d+$/)[0]+'档）':/^performance_R\d/.test(atom.key)?'业绩报酬基准 R'+atom.key.match(/\d+$/)[0]:field.label;
+ let f=task._factMap.get(factKey);if(!f){f={id:'fact-'+(task.facts.length+1),key:atom.key,label:factLabel,value:resolution.value,status:resolution.status,evidence:resolution.evidence||[],scope,occurrences:[],reason:resolution.reason,reasonType:resolution.reasonType||(resolution.status==='verified'?'confirmed':'needs_review')};task.facts.push(f);task._factMap.set(factKey,f);}
  f.occurrences.push({materialId:m.materialId,paragraphId:p.id,fieldId:field.id});field.factIds.push(f.id);
  const record={m,field,p,atom,f};task._records.push(record);renderRecord(record);
 }
