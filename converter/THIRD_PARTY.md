@@ -42,11 +42,13 @@
 
 2026-10-25 的真实浏览器验证发现，LibreOffice 在读取部分 DOC 时忽略 `sprmTDefTableShdRaw`，蓝色单元格在加载时就成为透明。两个 DOCX 输出过滤器均不能修复这一导入缺口。`src/doc-shading.js` 仅在交给引擎的内存副本中，将明确颜色的 Raw 底纹属性映射到此导入器支持的对应属性：`D670→D612`、`D671→D616`、`D672→D60C`。各操作数的原始颜色、长度、正文和文件偏移保持不变。这是针对 LibreOffice 的兼容桥，生成的中间 DOC 不提供给用户，也不声称是通用 DOC 规范化。
 
-解析顺序为 CFB 目录及 FAT/MiniFAT、FIB、PlcBtePapx、PapxFkp、Prl，并跟随 Data 中的 PrcData 指针。只访问根目录的 WordDocument/0Table/1Table/Data，不扫描正文、媒体或嵌入对象中的相似字节。对长度、版本、循环、扇区重叠和属性边界进行检查。ShdNil 的样式继承、复杂底纹图案或检测到的新旧底纹冲突不能仅靠 opcode 替换可靠表达，因此停止并提示先由 Word 另存为 DOCX。
+解析顺序为 CFB 目录及 FAT/MiniFAT、FIB、PlcBtePapx、PapxFkp、Prl，并跟随 Data 中的 PrcData 指针。只访问根目录的 WordDocument/0Table/1Table/Data，不扫描正文、媒体或嵌入对象中的相似字节。对长度、版本、循环、扇区重叠和属性边界进行检查；允许生产软件省略末扇区的填充字节，但实际逻辑数据必须完整。ShdNil 的样式继承、复杂底纹图案或检测到的新旧底纹冲突不能仅靠 opcode 替换可靠表达，因此不修改该副本的底纹属性，改由完整引擎直接转换，并保留核对表格底色的提示。只有有效的 DOCX 转换结果才能进入后续处理。
 
 依据：[Microsoft Table Properties](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/b39a6648-501c-4361-8366-4f042f579469)、[PapxFkp](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/34aaeaf3-9578-41af-a3f5-c12f6f66bf1b)、[PapxInFkp](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/580510b8-df7a-467e-a51c-0d71eb15c7cd)、[PrcData](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/473fd992-c824-4655-8880-3186bd432f80)、[LibreOffice WW8 importer](https://github.com/LibreOffice/core/blob/master/sw/source/filter/ww8/ww8par2.cxx)。实现根据公开文件格式规范编写，未复制 LibreOffice C++ 源码。
 
 私有 DOC 样本经浏览器转换并由原生 Word 打开/渲染后，三种蓝色单元格的数量与 Word 原生另存为结果一致（14、36、14），六页版面及修订归零通过复核。私有样本、诊断页和中间文件均不进入仓库。此验证不代表所有 Word/LibreOffice 排版差异均已消除。
+
+另一次真实 DOC 转换暴露了正文中残留缺少内容的旧批注引用：ZIP/XML 校验通过，原生 Word 普通打开却失败。转换后的检查按批注关系和编号清理这类悬空范围／引用并返回提示；所有现存批注内容、正文文字及其他包部件保持不变，不补造空批注。该样本修复后通过原生 Word 普通打开验证。测试覆盖保留有效批注和正文、无效 XML 仍报错。
 
 ## 官方 API 依据
 
