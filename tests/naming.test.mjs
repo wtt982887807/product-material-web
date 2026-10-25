@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {currentMonth,deliveryName,resolveProductionMonth,monthInputValue} from '../src/naming.js';
+import * as naming from '../src/naming.js';
 
 test('month is captured using Beijing time at a month boundary',()=>{
  assert.equal(currentMonth(new Date('2026-09-30T16:01:00Z')),'202610');
@@ -69,7 +70,30 @@ test('a proven abbreviation also retains omitted parenthetical qualifiers and di
  assert.equal(deliveryName('【甲行 海报2609】远航稳健18个月5号.pptx',{targetName:'示例机构远航稳健（优选配置）18个月1号集合资产管理计划',templateProductName:'示例机构远航稳健（优选配置）18个月5号集合资产管理计划',kind:'poster',month:'202610'}),'【甲行 海报2610】远航稳健18个月1号.pptx');
 });
 
-test('a series abbreviation cannot be inferred from a bare number, another series or marketing text',()=>{
+test('unproven filenames use the contract name without inferring an old product abbreviation',()=>{
  const args={targetName:'示例机构远航稳健22号集合资产管理计划',templateProductName:'示例机构远航稳健21号集合资产管理计划',kind:'word',month:'202610'};
- for(const stem of ['21号','星河多元21号','代表产品21号','历史业绩 远航稳健21号'])assert.throws(()=>deliveryName('【一页通202608】'+stem+'.docx',args),/无法对应/);
+ for(const stem of ['21号','星河多元21号','代表产品21号','历史业绩 远航稳健21号','其他产品X号','模板'])assert.equal(deliveryName('【一页通202608】'+stem+'.docx',args),'【一页通202610】示例机构远航稳健22号.docx');
+});
+
+test('QDII phase placeholders cannot block output or leak into the contract filename',()=>{
+ const args={targetName:'国泰海通君盈荟萃精选大类资产全周期QDII8号集合资产管理计划',templateProductName:'国泰海通君盈荟萃精选大类资产全周期QDII2号X期（X=1\\2\\3）集合资产管理计划',kind:'word',month:'202610'};
+ assert.equal(deliveryName('【一页通 202608】大类资产全周期QDII2号X期.docx',args),'【一页通 202610】国泰海通君盈荟萃精选大类资产全周期QDII8号.docx');
+ for(const name of ['示例1号X期','示例2号第5期','示例1号（X=1、2、3）'])assert.equal(deliveryName(`【一页通202608】${name}.docx`,{targetName:'示例1号集合资产管理计划',templateProductName:'示例2号集合资产管理计划',kind:'word',month:'202610'}),'【一页通202610】示例1号.docx');
+});
+
+test('unknown names preserve channel headers and PPT suffix but never stale product bodies',()=>{
+ const args={targetName:'示例稳健3号集合资产管理计划',templateProductName:'其他模板产品7号',kind:'ppt',month:'202610'};
+ assert.equal(deliveryName('【甲行】【PPT 202608】别名2号X期产品要素.pptx',args),'【甲行】【PPT 202610】示例稳健3号产品要素.pptx');
+ assert.equal(deliveryName('不明产品7号.pptx',args),'【202610】示例稳健3号产品要素.pptx');
+ assert.throws(()=>deliveryName('未知2号.docx',{kind:'word',month:'202610'}),/合同尚未确定/);
+});
+
+test('a matched name cannot leave another old product before it',()=>{
+ for(const body of ['旧产品2号 示例远航21号','旧产品2号 示例远航22号'])assert.equal(deliveryName(`【一页通202608】${body}.docx`,{targetName:'示例远航22号集合资产管理计划',templateProductName:'示例远航21号集合资产管理计划',kind:'word',month:'202610'}),'【一页通202610】示例远航22号.docx');
+});
+
+test('duplicate deliveries gain stable unique suffixes without overwriting later named files',()=>{
+ const input=['【一页通202610】示例3号.docx','【一页通202610】示例3号.docx','【一页通202610】示例3号（2）.docx','【一页通202610】示例3号.docx','a.pptx','A.pptx'];
+ assert.deepEqual(naming.uniqueDeliveryNames(input),['【一页通202610】示例3号.docx','【一页通202610】示例3号（3）.docx','【一页通202610】示例3号（2）.docx','【一页通202610】示例3号（4）.docx','a.pptx','A（2）.pptx']);
+ assert.equal(input[1],'【一页通202610】示例3号.docx');
 });

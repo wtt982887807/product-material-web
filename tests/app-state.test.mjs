@@ -116,6 +116,18 @@ async function chooseMaterials(app) {
   await app.elements.get('templates-input').dispatch('change', {target: {files: [file('示例模板.docx', 2)]}});
 }
 
+test('delivery previews use contract fallback and distinguish colliding template names',async()=>{
+ const app=createApp();await app.ready;await chooseMaterials(app);
+ await app.elements.get('analyze-button').click();
+ const material=app.state.task.materials[0];
+ material.template.name='【一页通202608】旧产品2号X期.docx';
+ app.state.task.materials.push({...material,template:{...material.template,name:'【一页通202608】未知产品7号.docx'}});
+ app.elements.get('month-value').value='2026-10';
+ await app.elements.get('month-value').dispatch('change');
+ const names=descendants(app.elements.get('delivery-list')).filter(n=>n.tagName==='strong').map(n=>n.textContent);
+ assert.deepEqual(names,['【一页通202610】示例稳健1号.docx','【一页通202610】示例稳健1号（2）.docx']);
+});
+
 test('manual month survives analysis, user supplement, and export; later edits update both download names', async () => {
   const analyzed = [], written = [];
   const app = createApp({onAnalyze: options => analyzed.push(options.month), onWrite: task => written.push(task.month)});

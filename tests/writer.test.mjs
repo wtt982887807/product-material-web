@@ -31,6 +31,18 @@ async function documentFixture({paragraphs=[wr('原产品，收益')+wr('3.','�
  const pars=els(doc,W,'p').map((node,index)=>({id:`p${index}`,part,index,node,text:els(node,W,'t').map(n=>n.textContent).join('')}));
  return {id:'test',name:'旧产品介绍202001.docx',kind:'docx',bytes,zip,parts:new Map([[part,doc]]),paragraphs:pars,slides:[],preparation:{changedParts:[],acceptedRevisions:0}};
 }
+test('unknown template names and duplicate output names never block valid Word files',async()=>{
+ const {writeTask}=await import('../src/office-writer.js');
+ const templates=await Promise.all([documentFixture({paragraphs:[wr('第一份模板内容')]}),documentFixture({paragraphs:[wr('第二份模板内容')]})]);
+ templates[0].name='【一页通202608】未知2号X期.docx';templates[1].name='【一页通202608】别名3号.docx';
+ const result=await writeTask({target:{name:'示例稳健8号集合资产管理计划'},month:'202610',materials:templates.map(template=>({template,kind:'word',templateProductName:'另一旧产品5号',operations:[],fields:[]}))});
+ assert.deepEqual(result.files.map(f=>f.name),['【一页通202610】示例稳健8号.docx','【一页通202610】示例稳健8号（2）.docx']);
+ assert.deepEqual(result.report.files.map(f=>f.name),result.files.map(f=>f.name));
+ for(const [i,file]of result.files.entries()){
+  const zip=await JSZip.loadAsync(file.bytes),xml=await zip.file('word/document.xml').async('string');
+  assert.ok(xml.includes(i===0?'第一份模板内容':'第二份模板内容'));assert.equal(file.report.structuralValidation,true);
+ }
+});
 async function presentationFixture({duplicateAuthors=false,usedDuplicate=false,linkExcluded=false}={}) {
  const zip=new JSZip(),parts=new Map(),paragraphs=[],slides=[];
  const presentation=`<p:presentation xmlns:p="${P}" xmlns:r="${R}"><p:sldIdLst>${[1,2,3].map(i=>`<p:sldId id="${255+i}" r:id="rId${i}"/>`).join('')}</p:sldIdLst><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId4"/></p:sldMasterIdLst><p:custShowLst><p:custShow name="旧放映" id="1"><p:sldLst><p:sld r:id="rId1"/></p:sldLst></p:custShow></p:custShowLst></p:presentation>`;
