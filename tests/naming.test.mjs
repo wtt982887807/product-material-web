@@ -36,3 +36,40 @@ test('automatic production month refreshes at Beijing month boundary; empty and 
  assert.equal(resolveProductionMonth({now:new Date('2026-10-31T16:00:00Z')}),'202611');
  for(const value of ['', '2026-13','2026-00','2026-1','abcd','2026-10-25'])assert.throws(()=>resolveProductionMonth({manualValue:value}));
 });
+
+test('a filename may omit the confirmed product issuer without blocking a Word export',()=>{
+ const name='国泰海通君享湘安21号集合资产管理计划';
+ assert.equal(deliveryName('【长沙银行一页通202608】君享湘安21号集合资产管理计划.docx',{targetName:name,templateProductName:name,kind:'word',month:'202610'}),'【长沙银行一页通202610】君享湘安21号集合资产管理计划.docx');
+});
+
+test('an issuer-free filename follows the contract number and preserves its legal suffix',()=>{
+ assert.equal(deliveryName('【长沙银行一页通202608】君享湘安21号集合资产管理计划.docx',{targetName:'国泰海通君享湘安22号集合资产管理计划',templateProductName:'国泰海通君享湘安21号集合资产管理计划',kind:'word',month:'202610'}),'【长沙银行一页通202610】君享湘安22号集合资产管理计划.docx');
+});
+
+test('a two-character series abbreviation must also match the confirmed full product name',()=>{
+ assert.equal(deliveryName('【一页通202608】鑫源25号.docx',{targetName:'示例机构鑫源26号集合资产管理计划',templateProductName:'示例机构鑫源25号集合资产管理计划',kind:'word',month:'202610'}),'【一页通202610】鑫源26号.docx');
+});
+
+test('a changed issuer preserves a proven series abbreviation and PPT suffix',()=>{
+ assert.equal(deliveryName('【甲行 PPT202609】远航稳健21号产品要素.pptx',{targetName:'新品牌远航稳健22号集合资产管理计划',templateProductName:'旧品牌远航稳健21号集合资产管理计划',kind:'ppt',month:'202610'}),'【甲行 PPT202610】远航稳健22号产品要素.pptx');
+});
+
+test('an issuer name extension cannot leak into an unchanged product series abbreviation',()=>{
+ assert.equal(deliveryName('【一页通202608】君享湘安21号.docx',{targetName:'国泰海通资管君享湘安22号集合资产管理计划',templateProductName:'国泰海通君享湘安21号集合资产管理计划',kind:'word',month:'202610'}),'【一页通202610】君享湘安22号.docx');
+});
+
+test('a known omitted prefix applies to a new series, while unprovable abbreviations use the full target',()=>{
+ const input='【一页通2609】远航稳健21号.docx';
+ const args={templateProductName:'示例机构远航稳健21号集合资产管理计划',kind:'word',month:'202610'};
+ assert.equal(deliveryName(input,{...args,targetName:'示例机构星河多元3号集合资产管理计划'}),'【一页通2610】星河多元3号.docx');
+ assert.equal(deliveryName(input,{...args,targetName:'不同机构星河多元3号集合资产管理计划'}),'【一页通2610】不同机构星河多元3号.docx');
+});
+
+test('a proven abbreviation also retains omitted parenthetical qualifiers and distinct month terms',()=>{
+ assert.equal(deliveryName('【甲行 海报2609】远航稳健18个月5号.pptx',{targetName:'示例机构远航稳健（优选配置）18个月1号集合资产管理计划',templateProductName:'示例机构远航稳健（优选配置）18个月5号集合资产管理计划',kind:'poster',month:'202610'}),'【甲行 海报2610】远航稳健18个月1号.pptx');
+});
+
+test('a series abbreviation cannot be inferred from a bare number, another series or marketing text',()=>{
+ const args={targetName:'示例机构远航稳健22号集合资产管理计划',templateProductName:'示例机构远航稳健21号集合资产管理计划',kind:'word',month:'202610'};
+ for(const stem of ['21号','星河多元21号','代表产品21号','历史业绩 远航稳健21号'])assert.throws(()=>deliveryName('【一页通202608】'+stem+'.docx',args),/无法对应/);
+});

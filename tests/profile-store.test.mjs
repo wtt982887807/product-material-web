@@ -83,6 +83,7 @@ function fakeIndexedDB() {
           assert.equal(mode, 'readwrite');
           return request(() => staged.clear());
         },
+        delete: key => { assert.equal(mode,'readwrite'); return request(()=>staged.delete(key)); },
       });
       later(complete);
       return tx;
@@ -123,6 +124,23 @@ test('only the most recent saved document is returned and clear removes it persi
   assert.equal((await createStore({indexedDB}).load()).name, 'next.docx');
   await store.clear();
   assert.equal(await createStore({indexedDB}).load(), null);
+});
+
+test('conditional migration removes only the expected source and retains a newer saved document',async()=>{
+ const store=createStore({indexedDB:fakeIndexedDB()});
+ assert.equal(typeof store.clearIfSha256,'function');
+ const old=record(),newer={...record('newer.docx'),sha256:'b'.repeat(64)};
+ await store.save(old);await store.save(newer);
+ assert.equal(await store.clearIfSha256(old.sha256),false);assert.deepEqual(await store.load(),newer);
+ assert.equal(await store.clearIfSha256(newer.sha256),true);assert.equal(await store.load(),null);
+ assert.equal(await store.clearIfSha256(newer.sha256),false);
+});
+
+test('conditional removal waits for commit and retains the prior document on failure',async()=>{
+ const indexedDB=fakeIndexedDB(),store=createStore({indexedDB});await store.save(record());
+ assert.equal(typeof store.clearIfSha256,'function');indexedDB.control.failCommit=true;
+ await assert.rejects(store.clearIfSha256(record().sha256),/清除|存储|空间/);
+ assert.deepEqual(await store.load(),record());
 });
 
 test('failed replacement after successful put rejects and preserves the previous committed document', async () => {

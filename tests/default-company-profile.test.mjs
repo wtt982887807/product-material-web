@@ -30,10 +30,11 @@ async function document(body){
   return{name:'合成旧版一页通.docx',bytes:await zip.generateAsync({type:'uint8array'})};
 }
 
-test('built-in profile includes both complete company layouts with their original independent dates',()=>{
+test('built-in profile includes both complete company layouts with the corrected June 2026 scale date',()=>{
   const profile=load();
   assert.equal(profile.version,'2026.10');
   assert.equal(profile.name,'公司介绍2026.10版本.docx');
+  assert.equal(profile.sha256,'42326e08f15f083c5bd0fe71b8e1363f3a962a80de63ab5b0fef929b7a6fcd56');
   assert.deepEqual(profile.sections.map(section=>section.layout),['narrative','kpi']);
   const [narrative,kpi]=profile.sections;
   assert.deepEqual(narrative.columns.find(column=>column.role==='company').entries.map(entry=>[entry.key,entry.text]),[
@@ -41,7 +42,7 @@ test('built-in profile includes both complete company layouts with their origina
     ['institution','全能型资产管理机构'],['experience','20多年资产管理经验'],
     ['team','专业的投研团队'],['product_system','全面的产品体系'],
     ['awards','荣获71座业内权威奖项“金牛奖”'],
-    ['aum','截至2025年6月末，公司资产管理规模超8800亿元*'],
+    ['aum','截至2026年6月末，公司资产管理规模超8800亿元*'],
   ]);
   assert.deepEqual(narrative.columns.find(column=>column.role==='shareholder').entries.map(entry=>entry.text),[
     '国泰海通证券股份有限公司由国泰君安与海通证券合并而成，是中国资本市场长期、持续、全面领先的综合金融服务商。',
@@ -110,7 +111,7 @@ test('built-in evidence updates both supported layouts in the existing company r
   }).join('\n');
   assert.match(text,/注册资本20亿元/);
   assert.match(text,/荣获71座业内权威奖项“金牛奖”/);
-  assert.match(text,/截至2025年6月末，公司资产管理规模超8800亿元/);
+  assert.match(text,/截至2026年6月末，公司资产管理规模超8800亿元/);
   assert.match(text,/资管规模数据时间截至2026\.6\.30/);
   assert.ok(material.operations.length>0);
   assert.ok(task.facts.some(fact=>fact.source==='company'));

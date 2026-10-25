@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import JSZip from 'jszip';
 import * as naming from '../src/naming.js';
 import {setSupplement} from '../src/review-engine.js';
+import * as companyDefaults from '../src/default-company-profile.js';
 
 const appSource = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
 const page = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
@@ -34,6 +35,7 @@ class Element {
     await Promise.all((this.listeners.get(type) || []).map(callback => callback(event)));
   }
   click() { return this.onclick?.({target: this, preventDefault() {}}); }
+  scrollIntoView() { this.scrolledIntoView = true; }
 }
 
 function deferred() {
@@ -51,16 +53,16 @@ const record = value => ({...value, bytes: new Uint8Array([1])});
 // Execute the real app event handlers with small DOM/import boundary fakes.
 // No browser, storage, Office files or network is used; naming and supplements
 // retain their production implementations.
-function createApp({store, parseCompanyProfile, onAnalyze, onWrite} = {}) {
+function createApp({store, parseCompanyProfile, onAnalyze, onWrite, onDownload} = {}) {
   const elements = new Map(ids.map(id => [id, new Element()]));
   const document = {
     getElementById(id) { assert.ok(elements.has(id), `Missing page element: ${id}`); return elements.get(id); },
-    createElement: tag => new Element(tag),
+    createElement: tag => { const element=new Element(tag); if(tag==='a'&&onDownload)element.click=()=>onDownload(element); return element; },
     querySelectorAll: () => [],
   };
   const saved = store || {load: async () => null, save: async () => {}, clear: async () => {}};
   const modules = {
-    './default-company-profile.js': {loadDefaultCompanyProfile: () => profile('builtin-company.docx', 'c')},
+    './default-company-profile.js': {loadDefaultCompanyProfile: () => profile('builtin-company.docx', 'c'), isSupersededCompanyProfile: companyDefaults.isSupersededCompanyProfile},
     './profile-store.js': {createProfileStore: () => saved},
     './company-profile.js': {
       parseCompanyProfile: parseCompanyProfile || (async ({name}) => profile(name)),
@@ -87,7 +89,7 @@ function createApp({store, parseCompanyProfile, onAnalyze, onWrite} = {}) {
     },
     './office-writer.js': {
       async writeTask(task) {
-        onWrite?.(task);
+        await onWrite?.(task);
         return {files: [{name: `示例_${task.month}.docx`, bytes: new Uint8Array([1]), mime: 'application/octet-stream'}]};
       },
     },
@@ -250,4 +252,63 @@ test('a failed save uses the new company only for this session without claiming 
   await chooseMaterials(app);
   await app.elements.get('analyze-button').click();
   assert.equal(app.state.task.companyProfile.name, latest.name);
+});
+
+test('generation progress and failures remain visible beside the download button and permit retry',async()=>{
+  const entered=deferred(),finish=deferred();let attempts=0;
+  const app=createApp({onWrite:async()=>{if(++attempts===1){entered.resolve();await finish.promise;throw new Error('文件名中的原产品名称无法对应所选模板');}}});
+  await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+  const status=app.elements.get('generation-status');
+  assert.ok(status,'The output panel has a visible generation status');
+  const pending=app.elements.get('generate-button').click();await entered.promise;
+  assert.equal(status.hidden,false);assert.match(status.textContent,/正在生成/);
+  assert.equal(app.elements.get('generate-button').disabled,true);
+  finish.resolve();await pending;
+  assert.match(status.textContent,/生成失败.*文件名/);assert.equal(status.hidden,false);
+  assert.equal(app.elements.get('generate-button').disabled,false);
+  await app.elements.get('generate-button').click();
+  assert.match(status.textContent,/已生成/);assert.doesNotMatch(status.textContent,/生成失败/);
+});
+
+test('automatic download denial leaves every direct download link usable and never reports generation failure',async()=>{
+  const app=createApp({onDownload:()=>{throw new Error('automatic download blocked');}});
+  await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+  await app.elements.get('generate-button').click();
+  const links=app.elements.get('download-list').children.filter(n=>n.tagName==='a');
+  assert.equal(links.length,2,'Bundle and original-format file links both survive');
+  assert.equal(app.elements.get('error-panel').hidden,true);
+  const status=app.elements.get('generation-status');assert.ok(status);
+  assert.match(status.textContent,/已生成.*点击/);
+  assert.equal(app.elements.get('download-list').scrolledIntoView,true);
+  app.elements.get('month-value').value='2030-02';await app.elements.get('month-value').dispatch('change');
+  assert.equal(status.hidden,true,'Stale download confirmation disappears when output naming changes');
+});
+
+test('only the known superseded company source is migrated to the corrected built-in profile',async()=>{
+  const old={...profile('公司介绍2026.10版本.docx'),sha256:'e627c53304a4e01b72435054d64f373589ca724884177144986070f4f8356f6f'};
+  let clears=0;
+  const app=createApp({store:{load:async()=>record(old),save:async()=>{},clearIfSha256:async hash=>{assert.equal(hash,old.sha256);clears++;return true;}},parseCompanyProfile:async()=>old});
+  await app.ready;assert.equal(app.state.companyIsDefault,true);assert.equal(clears,1);
+  assert.equal(app.state.companyStored,false);assert.match(app.elements.get('company-status').textContent,/更正/);
+  const distinct=profile(old.name,'d');let distinctClears=0;
+  const newer=createApp({store:{load:async()=>record(distinct),save:async()=>{},clear:async()=>{distinctClears++;}},parseCompanyProfile:async()=>distinct});
+  await newer.ready;assert.equal(newer.state.company.sha256,distinct.sha256);assert.equal(distinctClears,0);
+});
+
+test('a failed removal of the known old company cache cannot override the corrected built-in source',async()=>{
+  const old={...profile('公司介绍2026.10版本.docx'),sha256:'e627c53304a4e01b72435054d64f373589ca724884177144986070f4f8356f6f'};
+  const app=createApp({store:{load:async()=>record(old),save:async()=>{},clearIfSha256:async()=>{throw new Error('存储不可写');}},parseCompanyProfile:async()=>old});
+  await app.ready;assert.equal(app.state.companyIsDefault,true);assert.equal(app.state.companyStored,true);
+  assert.match(app.elements.get('company-status').textContent,/网页内置.*更正/);
+  assert.equal(app.elements.get('company-clear').hidden,false);
+});
+
+test('migration cannot delete a different company version saved by another page during parsing',async()=>{
+ const old={...profile('old.docx'),sha256:'e627c53304a4e01b72435054d64f373589ca724884177144986070f4f8356f6f'};
+ const newer=profile('newer.docx','d'),entered=deferred(),finish=deferred();let stored=record(old);
+ const store={load:async()=>stored,save:async value=>{stored=value;},clear:async()=>{stored=null;},clearIfSha256:async hash=>{if(stored?.sha256!==hash)return false;stored=null;return true;}};
+ const app=createApp({store,parseCompanyProfile:async()=>{entered.resolve();await finish.promise;return old;}});
+ await entered.promise;stored=record(newer);finish.resolve();await app.ready;
+ assert.equal(stored?.sha256,newer.sha256);assert.equal(app.state.companyStored,true);
+ assert.equal(app.state.companyIsDefault,true);
 });
