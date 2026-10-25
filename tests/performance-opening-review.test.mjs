@@ -29,6 +29,7 @@ test('a contract performance-table payout column is not a hurdle value',()=>{
  const payouts=task.facts.filter(f=>/^performance_ratio_/.test(f.key));
  assert.deepEqual(payouts.map(f=>f.value).sort(),['5%','50%']);
  assert.ok(payouts.every(f=>f.status==='verified'),'the payout column still supplies confirmed rates');
+ assert.ok(payouts.every(f=>f.label.includes('提成比例')&&!f.label.includes('基准')),'review labels distinguish payout rates from hurdles');
 });
 
 test('all repeated template hurdle values are yellow while identical payout numbers remain verified',()=>{
