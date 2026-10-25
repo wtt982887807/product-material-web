@@ -1,7 +1,7 @@
 import {currentMonth,deliveryName,resolveProductionMonth,monthInputValue} from './naming.js';
 
 const $=id=>document.getElementById(id);
-const state={contract:null,templates:[],task:null,filter:'focus',busy:false,urls:[],month:currentMonth(),manualMonth:undefined,monthValid:true,started:new Date(),run:0,company:null,companyReady:false,companyPersisted:false,companyStored:false,companyWarning:'',store:null};
+const state={contract:null,templates:[],task:null,filter:'focus',busy:false,urls:[],month:currentMonth(),manualMonth:undefined,monthValid:true,started:new Date(),run:0,company:null,companyIsDefault:false,companyReady:false,companyPersisted:false,companyStored:false,companyWarning:'',store:null};
 const el=(tag,className,text)=>{const n=document.createElement(tag);if(className)n.className=className;if(text!==undefined)n.textContent=text;return n;};
 const readableSize=bytes=>bytes>=1048576?(bytes/1048576).toFixed(1)+' MB':Math.max(1,Math.round(bytes/1024))+' KB';
 const nextPaint=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
@@ -29,11 +29,12 @@ function refreshSelection(){
 }
 function invalidate(){state.task=null;$('review-section').hidden=true;clearDownloads();changeStep('upload');$('error-panel').hidden=true;}
 function showCompany(){
- const prefix=state.company?`当前版本：${state.company.name}。${state.companyPersisted?'已保存在此浏览器，下次自动沿用。':'仅本次使用，尚未保存。'}`:'尚未上传公司介绍，本轮只更新产品要素。';
- $('company-status').textContent=prefix+(state.companyWarning?' '+state.companyWarning:'');$('company-clear').hidden=!state.company&&!state.companyStored;
+ const prefix=state.company?(state.companyIsDefault?`网页内置：${state.company.name}。未上传新版时自动使用。`:`当前版本：${state.company.name}。${state.companyPersisted?'已保存在此浏览器，下次自动沿用。':'仅本次使用，尚未保存。'}`):'公司介绍暂未加载，本轮只更新产品要素。';
+ $('company-status').textContent=prefix+(state.companyWarning?' '+state.companyWarning:'');$('company-clear').hidden=(!state.company||state.companyIsDefault)&&!state.companyStored;
 }
+async function useDefaultCompany(){const {loadDefaultCompanyProfile}=await import('./default-company-profile.js');state.company=loadDefaultCompanyProfile();state.companyIsDefault=true;state.companyPersisted=false;}
 async function restoreCompany(){
- try{const {createProfileStore}=await import('./profile-store.js');state.store=createProfileStore();const record=await state.store.load();if(record){state.companyStored=true;const {parseCompanyProfile}=await import('./company-profile.js');const profile=await parseCompanyProfile({name:record.name,bytes:record.bytes});if(profile.sha256!==record.sha256)throw new Error('已保存的公司介绍校验不一致，请重新上传。');state.company=profile;state.companyPersisted=true;}}
+ try{await useDefaultCompany();const {createProfileStore}=await import('./profile-store.js');state.store=createProfileStore();const record=await state.store.load();if(record){state.companyStored=true;const {parseCompanyProfile}=await import('./company-profile.js');const profile=await parseCompanyProfile({name:record.name,bytes:record.bytes});if(profile.sha256!==record.sha256)throw new Error('已保存的公司介绍校验不一致，请重新上传。');state.company=profile;state.companyIsDefault=false;state.companyPersisted=true;}}
  catch(error){if(error.code==='PROFILE_CACHE_INVALID')state.companyStored=true;state.companyWarning='未能恢复已保存版本：'+(error.message||String(error));}
  finally{state.companyReady=true;showCompany();refreshSelection();}
 }
@@ -45,17 +46,17 @@ async function selectCompany(files){
  try{const {parseCompanyProfile}=await import('./company-profile.js');const bytes=new Uint8Array(await file.arrayBuffer());const profile=await parseCompanyProfile({name:file.name,bytes});let persisted=false;state.companyWarning='';
   try{if(!state.store){const {createProfileStore}=await import('./profile-store.js');state.store=createProfileStore();}await state.store.save({schemaVersion:1,name:file.name,sha256:profile.sha256,uploadedAt:new Date().toISOString(),bytes,profile});persisted=true;state.companyStored=true;}
   catch(error){state.companyWarning='此版本本次可用，但未能保存；下次请重新上传。'+(error.message||'');}
-  state.company=profile;state.companyPersisted=persisted;invalidate();showCompany();
+  state.company=profile;state.companyIsDefault=false;state.companyPersisted=persisted;invalidate();showCompany();
  }catch(error){showError(new Error('公司介绍未更新，仍保留此前版本。'+(error.message||String(error))));}
  finally{$('company-input').value='';setBusy(false);$('progress-panel').hidden=true;}
 }
 $('company-input').addEventListener('change',e=>selectCompany(e.target.files));
-$('company-clear').onclick=async()=>{if(state.busy)return;setBusy(true);try{if(state.companyStored){if(!state.store)throw new Error('尚未连接本机保存空间，请刷新后再清除。');await state.store.clear();}state.company=null;state.companyStored=false;state.companyPersisted=false;state.companyWarning='';invalidate();showCompany();}catch(error){showError(error);}finally{setBusy(false);}};
+$('company-clear').onclick=async()=>{if(state.busy)return;setBusy(true);try{if(state.companyStored){if(!state.store)throw new Error('尚未连接本机保存空间，请刷新后再清除。');await state.store.clear();}state.companyStored=false;await useDefaultCompany();state.companyWarning='';invalidate();showCompany();}catch(error){showError(error);}finally{setBusy(false);}};
 function selectFiles(kind,files){
  if(state.busy)return;
  const list=[...files];if(!list.length)return;
- const allowed=kind==='contract'?/\.(docx|doc)$/i:/\.(docx|pptx)$/i;
- if(list.some(f=>!allowed.test(f.name))){showError(new Error(kind==='contract'?'请选择 DOCX 或 DOC 合同。':'模板支持 DOCX 和 PPTX 文件。'));return;}
+ const allowed=kind==='contract'?/\.(docx|doc)$/i:/\.(docx|doc|rtf|pptx)$/i;
+ if(list.some(f=>!allowed.test(f.name))){showError(new Error(kind==='contract'?'请选择 DOCX 或 DOC 合同。':'模板支持 DOCX、DOC、RTF 和 PPTX 文件。'));return;}
  if(list.some(f=>f.size>60*1024*1024)){showError(new Error('单个文件请控制在60 MB以内。'));return;}
  if(kind==='contract'){if(list.length!==1){showError(new Error('每次请选择一份主合同。'));return;}state.contract=list[0];}
  else{for(const file of list)if(!state.templates.some(f=>f.name===file.name&&f.size===file.size&&f.lastModified===file.lastModified))state.templates.push(file);}
@@ -73,12 +74,12 @@ $('reset-button').onclick=()=>{state.run++;state.contract=null;state.templates=[
 $('analyze-button').onclick=async()=>{
  if(state.busy||!state.companyReady)return;try{updateMonth();}catch(error){showError(error);return;}const run=++state.run;invalidate();setBusy(true);progress('正在读取合同','建立本次合同索引，保留文字出处。');await nextPaint();
  try{
-  const [{readContract,readTemplate},{analyzeMaterials}]=await Promise.all([import('./office-reader.js'),import('./review-engine.js')]);
+  const [{readContract},{readWordTemplate},{analyzeMaterials}]=await Promise.all([import('./office-reader.js'),import('./word-input.js'),import('./review-engine.js')]);
   const contract=await readContract({name:state.contract.name,bytes:new Uint8Array(await state.contract.arrayBuffer())});
   const templates=[];
-  for(const [i,file]of state.templates.entries()){progress(`正在读取模板 ${i+1} / ${state.templates.length}`,file.name);await nextPaint();templates.push(await readTemplate({name:file.name,bytes:new Uint8Array(await file.arrayBuffer())}));}
-  if(new Set(templates.map(t=>t.sha256)).size!==templates.length)throw new Error('选择了内容相同的重复模板，请移除重复文件。');
-  if(templates.some(t=>t.sha256===contract.sha256))throw new Error('合同不能同时作为待更新模板，请检查文件选择。');
+  for(const [i,file]of state.templates.entries()){progress(`正在准备模板 ${i+1} / ${state.templates.length}`,`接受旧修订，按需转换 DOCX：${file.name}`);await nextPaint();templates.push(await readWordTemplate({name:file.name,bytes:new Uint8Array(await file.arrayBuffer())},{onProgress:progress}));}
+  if(new Set(templates.map(t=>t.sourceSha256||t.sha256)).size!==templates.length)throw new Error('选择了内容相同的重复模板，请移除重复文件。');
+  if(templates.some(t=>(t.sourceSha256||t.sha256)===contract.sha256))throw new Error('合同不能同时作为待更新模板，请检查文件选择。');
   progress('正在统一核对产品要素','合并共同需求，查找合同依据，再定位各物料的改动。');await nextPaint();
   const task=await analyzeMaterials(contract,templates,{now:state.started,month:state.month});task.now=state.started;
   if(state.company){progress('正在核对一页通公司介绍',state.company.name);await nextPaint();const {applyCompanyProfile}=await import('./company-profile.js');await applyCompanyProfile(task,state.company);}
