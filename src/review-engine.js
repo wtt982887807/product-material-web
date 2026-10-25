@@ -1,4 +1,5 @@
 // Local evidence rules. No network calls and no product-specific answer tables.
+import {NS,elements} from './office-xml.js';
 const PRODUCT_END='(?:集合资金信托计划|集合资产信托计划|集合资产管理计划|单一资产管理计划|资产管理计划|证券投资基金|信托计划)';
 const NAME_LABEL=/^(?:产品名称|产品全称|信托名称|信托计划名称|基金名称|计划名称|资产管理计划名称|产品简称)$/;
 const MARKETING=/历史业绩|产品表现|累计增长|最新净值|成立以来|年化收益|产品举例|同策略|代表产品|获奖|金牛奖/;
@@ -85,18 +86,55 @@ function resolveFee(key,rs,scope,trust){
  }
  return pick(candidates);
 }
+function performanceTokens(text){
+ const tokens=[];
+ for(const m of text.matchAll(PERCENT)){
+  const left=text.slice(Math.max(0,m.index-150),m.index),right=text.slice(m.index+m[0].length,m.index+m[0].length+40);
+  const column=left.split('\n').at(-1),tablePayout=/[\t|]\s*$/.test(column)&&/[RＲF]|收益率/.test(column)&&/[＜≤<>＞≥]/.test(column);
+  const payout=tablePayout||/(?:提取|计提|收取|提成|×|乘以|按)[【\s]*$/.test(left)||/^(?:的|比例的).{0,6}(?:业绩报酬|浮动服务费)|^(?:计提|提取)/.test(right);
+  const hurdle=!payout&&(/(?:[＜≤<>＞≥=＝]|高于|低于|超过|超出|大于|小于|基准(?:为|是)?|R[12](?:为|是)|收益率(?:为|是)?|年化)[【\s]*$/.test(left)||/^\s*[＜≤<>＞≥]/.test(right)||/\d+(?:\.\d+)?%\s*[-—~～]\s*$/.test(left)||/^\s*[-—~～]\s*\d/.test(right)||/(?:[RＲF]|收益率)[-－]\s*$/.test(left));
+  tokens.push({start:m.index,before:m[0],value:`${number(m[0])}%`,role:payout?'ratio':hurdle?'threshold':'unknown'});
+ }
+ return tokens;
+}
+function payoutTier(text,token,thresholds){
+ let prefix=text.slice(0,token.start).replace(/\s+/g,'');
+ // Formula multipliers belong to the immediately preceding return segment.
+ const formula=prefix.match(/[（(]([^()（）]+)[）)]×[【]?$/);
+ const segment=formula?.[1]||prefix.split(/[。；;，,]/).at(-1);
+ const prior=prefix.slice(0,prefix.length-segment.length).split(/[。；;\n]/).at(-1);
+ const context=segment||prior;
+ const low=thresholds[0],high=thresholds.at(-1),two=thresholds.length>1;
+ const symbolHigh=/R2/.test(context),symbolLow=/R1/.test(context);
+ if(formula){
+  if(symbolHigh&&symbolLow)return 1;
+  if(symbolHigh&&/[RＲF]-R2/.test(context))return 2;
+  const values=performanceTokens(context).filter(t=>t.role==='threshold'||context.includes('-')).map(t=>number(t.value));
+  if(two&&values.includes(low)&&values.includes(high))return 1;
+  if(two&&values.includes(high)&&/[RＲF]|收益率/.test(context))return 2;
+  if(symbolLow||values.includes(low))return 1;
+ }
+ // A second extraction in the same sentence may refer back to the lower band.
+ const local=prefix.split(/提取[^提取]*?%|计提[^计提]*?%/).at(-1);
+ const band=local.split(/[。；;]/).at(-1);
+ if(/R1.{0,20}(?:R|年化收益率).{0,8}[≤<＜].{0,2}R2|(?:不高于|不超过|≤|＜)R2/.test(band)&&/R1/.test(band))return 1;
+ if(/(?:[RＲF]|收益率)[>＞]R2|(?:高于|超过|大于)R2/.test(band))return 2;
+ const values=performanceTokens(band).filter(t=>t.role==='threshold').map(t=>number(t.value));
+ if(two&&values.includes(low)&&values.includes(high)&&/(?:不高于|不超过|≤|＜|区间|[-—~～])/.test(band))return 1;
+ if(two&&values.includes(high)&&/(?:高于|超过|超出|大于|＞|>)/.test(band))return 2;
+ if(two&&values.includes(high)&&/(?:≤|＜)/.test(band))return 1;
+ if(thresholds.length===1&&values.includes(low))return 1;
+ return null;
+}
 function performanceData(rs){
  const relevant=rs.filter(b=>!b.joined&&/业绩报酬|浮动服务费|浮动信托管理费|年化收益率|R1|R2|[FＲR][≤＜<>＞]/.test(b.text));
  const thresholds=[],ratios=[];
- for(const b of relevant){for(const m of b.text.matchAll(PERCENT)){
-  const n=number(m[0]);const left=b.text.slice(Math.max(0,m.index-38),m.index),right=b.text.slice(m.index+m[0].length,m.index+m[0].length+35);
-  const ratio=/(?:提取|计提|收取|提成|×)\s*$/.test(left)||/^(?:的|比例的).{0,8}(?:业绩报酬|浮动服务费)/.test(right);
-  const threshold=!ratio&&n<15&&/(?:收益率|基准|[FＲR≤＜<>＞=＝]|[-—~～])/.test(left+right);
-  if(ratio&&n>0&&n<100&&!/计提总数的$/.test(left))ratios.push({value:`${n}%`,evidence:[quote(b.base||b,b.text)]});
-  if(threshold)thresholds.push({value:`${n}%`,evidence:[quote(b.base||b,b.text)]});
- }}
+ const all=relevant.flatMap(b=>performanceTokens(b.text).map(t=>({...t,b})));
+ for(const t of all)if(t.role==='threshold')thresholds.push({value:t.value,evidence:[quote(t.b.base||t.b,t.b.text)]});
+ const boundaries=unique(thresholds.map(t=>number(t.value))).sort((a,b)=>a-b);
+ for(const t of all)if(t.role==='ratio'&&number(t.value)>0&&number(t.value)<100)ratios.push({value:t.value,tier:payoutTier(t.b.text,t,boundaries),evidence:[quote(t.b.base||t.b,t.b.text)]});
  const byValue=arr=>[...new Map(arr.map(a=>[a.value,a])).values()].sort((a,b)=>number(a.value)-number(b.value));
- return{thresholds:byValue(thresholds),ratios:byValue(ratios),symbolic:relevant.some(b=>/R1|R2|R[’′']/.test(b.text)),evidence:relevant.filter(b=>/R1|R2|R[’′']/.test(b.text)).slice(-3).map(b=>quote(b.base||b,b.text))};
+ return{thresholds:byValue(thresholds),ratios:byValue(ratios),tierRatios:ratios,symbolic:relevant.some(b=>/R1|R2|R[’′']/.test(b.text)),evidence:relevant.filter(b=>/R1|R2|R[’′']/.test(b.text)).slice(-3).map(b=>quote(b.base||b,b.text))};
 }
 function resolveAtom(key,label,rs,scope,target,extra={}){
  const allowed=filtered(rs,scope);
@@ -104,6 +142,7 @@ function resolveAtom(key,label,rs,scope,target,extra={}){
  if(key.endsWith('_fee'))return resolveFee(key,rs,scope,/信托/.test(target.name));
  if(key.startsWith('performance_')){
   const pd=performanceData(allowed),isRatio=key.includes('ratio');const idx=Number(key.match(/\d+$/)?.[0])-1;const list=isRatio?pd.ratios:pd.thresholds;
+  if(isRatio&&pd.tierRatios.some(r=>r.tier))return pick(pd.tierRatios.filter(r=>r.tier===idx+1),'合同未给出可对应的该档提成比例。');
   if(!isRatio&&pd.symbolic&&!list.length)return{status:'pending',value:null,evidence:pd.evidence,reasonType:'contract_missing',reason:'合同仅以符号定义业绩报酬基准并指向公告，未给出该档实际基准；保留模板各自原值待核。'};
   const val=list[idx];return val?{status:'verified',reason:'按合同分段计提条款核对同档参数。',...val}:{status:'pending',value:null,evidence:pd.evidence,reason:'合同未给出可对应的该档参数。'};
  }
@@ -240,17 +279,25 @@ function posterRows(template,headings){
  const rows=[];let label='',ids=[];const ps=template.paragraphs||[];
  const flush=()=>{if(label&&ids.length){const p=ps.find(p=>p.id===ids[0]);rows.push({id:'poster-'+rows.length,label,value:ids.map(id=>ps.find(p=>p.id===id).text).join('\n'),part:p.part,page:p.page,paragraphIds:ids,cells:[{text:label,paragraphIds:[]},{text:ids.map(id=>ps.find(p=>p.id===id).text).join('\n'),paragraphIds:ids}]});}ids=[];};
  for(const p of ps){const text=p.text.trim();if(!text)continue;const clean=text.replace(/[：:]$/,'');
-  if(headings?.names.has(p.id)||headings?.dates.has(p.id)){flush();label='';continue;}
+  if(headings?.names.has(p.id)){flush();label='';continue;}
+  if(headings?.dates.has(p.id)){if(keyFor(label)==='opening')ids.push(p.id);else{flush();label='';}continue;}
   if(/^(?:历史业绩|过往业绩|业绩表现|产品表现|同策略产品|产品特点|产品亮点|管理人介绍|公司介绍|团队介绍|个人履历|风险提示|风险揭示)/.test(text)||/(?:过去.{0,8}(?:年化|收益|业绩)|成立以来|数据来源)/.test(text)){flush();label='';continue;}
   if(clean.length<22&&(!keyFor(clean).startsWith('custom:')||/[：:]$/.test(text)&&!/产品特点|产品亮点|团队|介绍|履历|姓名/.test(clean))){flush();label=clean;continue;}if(label){if(/履历|个人简介|：.{0,20}大学|现任|历任|擅长|本产品由|本资料仅/.test(text)){flush();label='';}else ids.push(p.id);}}
  flush();return rows;
 }
 function minimalChange(before,after){let start=0;while(start<before.length&&start<after.length&&before[start]===after[start])start++;let endA=before.length,endB=after.length;while(endA>start&&endB>start&&before[endA-1]===after[endB-1]){endA--;endB--;}return{start,before:before.slice(start,endA),after:after.slice(start,endB)};}
+function alignedBoundaries(before,after){
+ const n=before.length,m=after.length,d=Array.from({length:n+1},()=>new Uint16Array(m+1));
+ for(let i=n;i>=0;i--)for(let j=m;j>=0;j--)d[i][j]=i===n?m-j:j===m?n-i:Math.min(d[i+1][j+1]+(before[i]===after[j]?0:1),d[i+1][j]+1,d[i][j+1]+1);
+ const map=new Map();let i=0,j=0;
+ while(i<n||j<m){map.set(i,j);if(i<n&&j<m&&d[i][j]===d[i+1][j+1]+(before[i]===after[j]?0:1)){i++;j++;}else if(j<m&&d[i][j]===d[i][j+1]+1)j++;else i++;}
+ map.set(n,m);return map;
+}
 function nameStyle(canonical,before){
  let s=canonical;if(before.includes('('))s=s.replaceAll('（','(').replaceAll('）',')');
  const dot=before.indexOf('·');if(dot>0){const prefix=before.slice(0,dot);if(s.startsWith(prefix)&&!s.includes('·'))s=s.slice(0,prefix.length)+'·'+s.slice(prefix.length);}
- const oldTail=before.replace(/\s/g,'').match(new RegExp(PRODUCT_END+'$')),newTail=s.match(new RegExp(PRODUCT_END+'$'));
- const spaces=[...before.matchAll(/\s+/g)].map(m=>{let position=before.slice(0,m.index).replace(/\s/g,'').length;if(oldTail&&newTail&&position>=oldTail.index)position=newTail.index+position-oldTail.index;return{position,text:m[0]};});for(const x of spaces.reverse())s=s.slice(0,x.position)+x.text+s.slice(x.position);
+ const boundaries=alignedBoundaries(before.replace(/\s/g,''),s);
+ const spaces=[...before.matchAll(/\s+/g)].map(m=>({position:boundaries.get(before.slice(0,m.index).replace(/\s/g,'').length),text:m[0]}));for(const x of spaces.reverse())s=s.slice(0,x.position)+x.text+s.slice(x.position);
  return s;
 }
 function monthNow(now){return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit'}).format(now||new Date()).replace('-','');}
@@ -268,9 +315,13 @@ function atomsFor(label,text,target,fieldText=text){
  }
  if(['fees','management_fee','custody_fee','subscription_fee','redemption_fee'].includes(key)){const labeled=FEE_LABELS.find(([,re])=>new RegExp('^(?:'+re.source+')$').test(labelNorm(label)))?.[0];const feeKey=/(?:参与|认.{0,5}购)[/／、及和].{0,4}(?:退出|赎回)/.test(label)?'subscription_redemption_fee':labeled||key;return feeTokens(text,feeKey,trust).map(t=>({...t,scope:scopeFor(label,text,t.start)}));}
  if(key==='performance'){
-  const matches=[...text.matchAll(PERCENT)],all=[...fieldText.matchAll(PERCENT)];const thresholds=unique(all.filter(m=>number(m[0])<15&&!/(提取|计提|收取|×)\s*$/.test(fieldText.slice(Math.max(0,m.index-15),m.index))).map(m=>number(m[0]))).sort((a,b)=>a-b);
-  const ratios=unique(all.filter(m=>!thresholds.includes(number(m[0]))&&number(m[0])<100&&number(m[0])>0).map(m=>number(m[0]))).sort((a,b)=>a-b);
-  for(const m of matches){const n=number(m[0]);const ti=thresholds.indexOf(n),ri=ratios.indexOf(n);if(ti>=0)add('performance_R'+(ti+1),m);else if(ri>=0)add('performance_ratio_'+(ri+1),m);}
+  const matches=performanceTokens(text),all=performanceTokens(fieldText),thresholds=unique(all.filter(t=>t.role==='threshold').map(t=>number(t.value))).sort((a,b)=>a-b);
+  const ratios=unique(all.filter(t=>t.role==='ratio').map(t=>number(t.value))).sort((a,b)=>a-b);
+  for(const token of matches){
+   const n=number(token.value),tier=token.role==='ratio'?(payoutTier(text,token,thresholds)||ratios.indexOf(n)+1):thresholds.indexOf(n)+1;
+   if(token.role==='unknown')atoms.push({...token,key:'custom:performance_parameter',manualReviewReason:'尚无法确认该百分比是基准还是提成比例，保留模板原值待核。'});
+   else atoms.push({...token,key:token.role==='ratio'?'performance_ratio_'+tier:'performance_R'+tier});
+  }
   return atoms;
  }
  if(['opening','lockup','duration'].includes(key)){
@@ -288,6 +339,31 @@ function atomsFor(label,text,target,fieldText=text){
  return[{key,start:0,before:text,value:text}];
 }
 function materialKind(t){return t.kind==='docx'?'word':/海报/.test(t.name)||t.slides?.length===1?'poster':'ppt';}
+function wordCoverNames(template,target){
+ const names=new Map(),body=[];
+ for(const p of template.paragraphs.filter(p=>p.part==='word/document.xml')){
+  const nodes=p.node?elements(p.node,NS.w):[];
+  if(p.page>1||body.length&&nodes.some(n=>n.localName==='pageBreakBefore'&&!['0','false','off'].includes(n.getAttributeNS(NS.w,'val'))))break;
+  if(p.text.trim())body.push(p);
+  if(nodes.some(n=>n.localName==='sectPr'||n.localName==='br'&&n.getAttributeNS(NS.w,'type')==='page'))break;
+  if(body.length>=8)break;
+ }
+ const legal=new RegExp('^'+PRODUCT_END+'$'),full=new RegExp('^([^。；;：:,，]{4,110}?'+PRODUCT_END+')$');
+ // The main cover has its own identity. A stale title need not equal the table's alias.
+ for(let i=0;i<Math.min(body.length,8);i++){
+  const p=body[i],text=p.text.trim();
+  if(p.tableId||REFERENCE_TITLE.test(text)||MARKETING.test(text)||/产品要素|风险提示|公司介绍|管理人介绍/.test(text)||text.length>130)break;
+  if(full.test(text)&&!legal.test(text)){
+   names.set(p.id,{before:text,after:target.name});break;
+  }
+  const next=body[i+1];
+  if(next&&!next.tableId&&legal.test(next.text.trim())&&text.length>=4&&!/[。；;：:,，]/.test(text)){
+   names.set(p.id,{before:text,after:target.shortName});
+   names.set(next.id,{before:next.text.trim(),after:target.name.slice(target.shortName.length)});break;
+  }
+ }
+ return names;
+}
 function fieldParagraphs(row,map){const ids=row.cells?.slice(1).flatMap(c=>c.paragraphIds||[])||row.paragraphIds;return unique(ids||[]).map(id=>map.get(id)).filter(Boolean);}
 function addOccurrence(task,m,field,p,atom,resolution){
  const scope={product:task.target.name,...(atom.scope||scopeFor(field.label,p.text,atom.start))};
@@ -306,8 +382,11 @@ function renderRecord({m,field,p,atom,f}){
   if(equivalent(atom.value,after))return;
   const percentage=atom.before.match(/^(\d+(?:\.(\d+))?)(\s*[】\]]?\s*[%％])$/);
   if(/^\d+(?:\.\d+)?%$/.test(after)&&percentage){const decimals=percentage[2]?.length||0,needed=after.split('.')[1]?.replace('%','').length||0;after=number(after).toFixed(Math.max(decimals,needed))+percentage[3];}
-  const diff=atom.before.length<35&&!['product_name','manager','custodian','advisor','distributor'].includes(atom.key)?{start:0,before:atom.before,after}:minimalChange(atom.before,after);if(!diff.before&&!diff.after)return;
-  m.operations.push({...common,id:'op-'+m.operations.length,kind:'replace',start:atom.start+diff.start,before:diff.before,after:diff.after});
+  const lines=atom.key==='product_name'&&atom.before.includes('\n')?atom.before.split('\n'):null;
+  const diffs=[];
+  if(lines&&lines.length===after.split('\n').length){let offset=0;const next=after.split('\n');for(let i=0;i<lines.length;i++){const diff=minimalChange(lines[i],next[i]);diffs.push({...diff,start:offset+diff.start});offset+=lines[i].length+1;}}
+  else diffs.push(atom.before.length<35&&!['product_name','manager','custodian','advisor','distributor'].includes(atom.key)?{start:0,before:atom.before,after}:minimalChange(atom.before,after));
+  for(const diff of diffs)if(diff.before||diff.after)m.operations.push({...common,id:'op-'+m.operations.length,kind:'replace',start:atom.start+diff.start,before:diff.before,after:diff.after});
  }else{
   const spans=atom.before.matchAll(/\d+(?:\.\d+)?\s*[%％]?|R[1-5]|[一二三四五六日天](?=开放)/g);const list=[...spans];
   // Compound pending text is anchored to each parameter rather than painting whole cells.
@@ -353,7 +432,7 @@ export function analyzeMaterials(contract,templates,{now,month}={}){
  if(!target.name){task.warnings.push(target.reason);throw new Error(target.reason);}
  const rs=records(contract);
  for(const t of templates){
-  const kind=materialKind(t),selection=getRows(t,target),headings=kind==='poster'?posterHeadings(t,selection.name):null,rows=selection.rows.length?selection.rows:kind==='poster'?posterRows(t,headings):[];
+  const kind=materialKind(t),selection=getRows(t,target),headings=kind==='poster'?posterHeadings(t,selection.name):null,coverNames=kind==='word'?wordCoverNames(t,target):new Map(),rows=selection.rows.length?selection.rows:kind==='poster'?posterRows(t,headings):[];
   const m={materialId:t.id,template:t,kind,templateProductName:headings?.name||selection.name,selectedPages:kind==='poster'?(t.slides||[]).map(s=>s.page):selection.pages,operations:[],fields:[],warnings:[...(t.warnings||[])]};Object.defineProperty(m,'_performanceText',{value:rows.filter(r=>keyFor(r.label)==='performance').map(r=>r.value).join('\n')});task.materials.push(m);
   if(!rows.length)m.warnings.push('尚未识别到可可靠定位的产品要素区，需检查模板结构。');
   const map=new Map(t.paragraphs.map(p=>[p.id,p]));const selectedIds=new Set();
@@ -362,7 +441,7 @@ export function analyzeMaterials(contract,templates,{now,month}={}){
    for(const p of ps)if(p.text.trim())reviewParagraph(task,m,field,p,rs);
   }
   // Direct identity repeats are safe only in title/disclosure text, never performance prose or peer tables.
-  for(const [id,{atoms}] of headings?.dates||[]){const p=map.get(id),field={id:`${t.id}-field-${m.fields.length+1}`,label:'开售/开放日期',before:p.text,after:'',factIds:[],paragraphIds:[id],status:'pending'};m.fields.push(field);for(const atom of atoms)addOccurrence(task,m,field,p,atom,pendingAnnouncement());}
+  for(const [id,{atoms}] of headings?.dates||[]){const pending=atoms.filter(a=>!task._records.some(r=>r.m===m&&r.p.id===id&&r.atom.key===a.key&&r.atom.start===a.start));if(!pending.length)continue;const p=map.get(id),field={id:`${t.id}-field-${m.fields.length+1}`,label:'开售/开放日期',before:p.text,after:'',factIds:[],paragraphIds:[id],status:'pending'};m.fields.push(field);for(const atom of pending)addOccurrence(task,m,field,p,atom,pendingAnnouncement());}
   const old=m.templateProductName;const oldShort=old?.replace(new RegExp(PRODUCT_END+'$'),'');
   for(const p of t.paragraphs){if(selectedIds.has(p.id)||p.tableId||headings?.excluded.has(p.id)||kind==='ppt'&&!m.selectedPages.includes(p.page)||MARKETING.test(p.text))continue;
    const code=p.text.match(/(?:^|\n)\s*(?:产品代码|产品编码)\s*[：:（(【\s]*([A-Z0-9]{5,25})\s*[）)】]?\s*$/);
@@ -370,10 +449,10 @@ export function analyzeMaterials(contract,templates,{now,month}={}){
    if(/本(?:信托|集合)?计划|本产品|本材料/.test(p.text)&&!/(?:曾在|历任|履历)/.test(p.text))for(const a of p.text.matchAll(/([\u4e00-\u9fffA-Za-z]{2,65}?(?:股份有限公司|有限责任公司|有限公司|证券|资产管理|资管|信托|银行))(?:作为|担任)(?:本产品|本信托计划|本集合计划|本计划)?的?投资顾问/g)){
     const before=a[1].split(/(?:由|聘请|委托|指定)/).at(-1);if(!before||before.length<3)continue;const field={id:`${t.id}-field-${m.fields.length+1}`,label:'投资顾问',before:p.text,after:'',factIds:[],paragraphIds:[p.id],status:'pending'};m.fields.push(field);const atom={key:'advisor',start:a.index+a[1].lastIndexOf(before),before,value:before};addOccurrence(task,m,field,p,atom,resolveAtom('advisor',field.label,rs,scopeFor(field.label,p.text),target));
    }
-   let identitySource=headings?.names.get(p.id)?.before||(old&&p.text.includes(old)?old:oldShort&&oldShort.length>4&&p.text.includes(oldShort)?oldShort:null);
+   let identitySource=coverNames.get(p.id)?.before||headings?.names.get(p.id)?.before||(old&&p.text.includes(old)?old:oldShort&&oldShort.length>4&&p.text.includes(oldShort)?oldShort:null);
    if(!identitySource&&old&&[norm(old),norm(oldShort)].includes(norm(p.text)))identitySource=p.text.trim();
    if(kind==='poster'&&REFERENCE_TITLE.test(p.text))identitySource=null;
-   if(identitySource&&p.text.length<150){const full=new RegExp(PRODUCT_END+'$').test(identitySource);const to=full?target.name:target.shortName;const start=p.text.indexOf(identitySource);const f={id:`${t.id}-field-${m.fields.length+1}`,label:'产品名称',before:p.text,after:'',factIds:[],paragraphIds:[p.id],status:'pending'};m.fields.push(f);addOccurrence(task,m,f,p,{key:'product_name',start,before:identitySource,value:identitySource,renderValue:to},{status:'verified',value:target.name,evidence:target.evidence,reason:'同步产品标题中的名称。'});}
+   if(identitySource&&p.text.length<150){const full=new RegExp(PRODUCT_END+'$').test(identitySource);const to=coverNames.get(p.id)?.after||(full?target.name:target.shortName);const start=p.text.indexOf(identitySource);const f={id:`${t.id}-field-${m.fields.length+1}`,label:'产品名称',before:p.text,after:'',factIds:[],paragraphIds:[p.id],status:'pending'};m.fields.push(f);addOccurrence(task,m,f,p,{key:'product_name',start,before:identitySource,value:identitySource,renderValue:to},{status:'verified',value:target.name,evidence:target.evidence,reason:'同步产品标题中的名称。'});}
    if(/(?:本(?:集合|信托)?计划|本产品|管理人).{0,30}(?:风险等级|风险评级|评级)/.test(p.text)&&/R[1-5]/.test(p.text)){const f={id:`${t.id}-field-${m.fields.length+1}`,label:'风险等级',before:p.text,after:'',factIds:[],paragraphIds:[p.id],status:'pending'};m.fields.push(f);reviewParagraph(task,m,f,p,rs);}
   }
   m.productElementsLocated=m.fields.some(f=>f.source!=='company');
