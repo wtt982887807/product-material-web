@@ -60,6 +60,7 @@ function createApp({store, parseCompanyProfile, onAnalyze, onWrite} = {}) {
   };
   const saved = store || {load: async () => null, save: async () => {}, clear: async () => {}};
   const modules = {
+    './default-company-profile.js': {loadDefaultCompanyProfile: () => profile('builtin-company.docx', 'c')},
     './profile-store.js': {createProfileStore: () => saved},
     './company-profile.js': {
       parseCompanyProfile: parseCompanyProfile || (async ({name}) => profile(name)),
@@ -68,6 +69,9 @@ function createApp({store, parseCompanyProfile, onAnalyze, onWrite} = {}) {
     './office-reader.js': {
       readContract: async ({name}) => ({name, sha256: 'contract'}),
       readTemplate: async ({name}) => ({id: 'template', name, sha256: 'template', kind: 'docx', paragraphs: []}),
+    },
+    './word-input.js': {
+      readWordTemplate: async ({name}) => ({id: 'template', name:name.replace(/\.(doc|rtf)$/i,'.docx'), sha256: 'template', kind: 'docx', paragraphs: []}),
     },
     './review-engine.js': {
       analyzeMaterials(contract, templates, options) {
@@ -178,10 +182,52 @@ test('an invalid cached record exposes a working clear action', async () => {
   assert.match(app.elements.get('company-status').textContent, /未能恢复/);
   await clear.click();
   assert.equal(clears, 1);
-  assert.equal(app.state.company, null);
+  assert.equal(app.state.company.name, 'builtin-company.docx');
   assert.equal(app.state.companyStored, false);
   assert.equal(clear.hidden, true);
   assert.doesNotMatch(app.elements.get('company-status').textContent, /未能恢复/);
+});
+
+test('a fresh browser starts with the built-in company reference without uploading', async () => {
+  const app = createApp();
+  await app.ready;
+  assert.equal(app.state.company?.name, 'builtin-company.docx');
+  assert.match(app.elements.get('company-status').textContent, /网页内置/);
+  assert.equal(app.elements.get('company-clear').hidden, true);
+  await chooseMaterials(app);
+  await app.elements.get('analyze-button').click();
+  assert.equal(app.state.task.companyProfile.name, 'builtin-company.docx');
+});
+
+test('an uploaded company reference overrides the built-in version and clearing returns to it', async () => {
+  const saved = profile('uploaded-company.docx');
+  let cleared = false;
+  const app = createApp({store: {load: async () => record(saved), save: async () => {}, clear: async () => { cleared = true; }}});
+  await app.ready;
+  assert.equal(app.state.company.name, saved.name);
+  assert.match(app.elements.get('company-status').textContent, /已保存在此浏览器/);
+  await app.elements.get('company-clear').click();
+  assert.equal(cleared, true);
+  assert.equal(app.state.company.name, 'builtin-company.docx');
+  assert.match(app.elements.get('company-status').textContent, /网页内置/);
+});
+
+test('unavailable browser storage still leaves the built-in reference usable', async () => {
+  const app = createApp({store: {load: async () => { throw new Error('无法使用浏览器保存空间'); }, save: async () => {}, clear: async () => {}}});
+  await app.ready;
+  assert.equal(app.state.company?.name, 'builtin-company.docx');
+  assert.match(app.elements.get('company-status').textContent, /网页内置/);
+  await chooseMaterials(app);
+  assert.equal(app.elements.get('analyze-button').disabled, false);
+});
+
+test('the upload flow accepts a legacy Word template and analyzes the prepared DOCX',async()=>{
+  const app=createApp();await app.ready;
+  await app.elements.get('contract-input').dispatch('change',{target:{files:[file('示例合同.docx')]}});
+  await app.elements.get('templates-input').dispatch('change',{target:{files:[file('旧模板.doc',2)]}});
+  assert.equal(app.state.templates.length,1);
+  await app.elements.get('analyze-button').click();
+  assert.equal(app.state.task.templates[0].name,'旧模板.docx');
 });
 
 test('a failed save uses the new company only for this session without claiming persistence', async () => {
