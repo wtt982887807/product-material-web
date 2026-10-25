@@ -97,7 +97,7 @@ function openDatabase(indexedDB) {
   });
 }
 
-async function transaction(indexedDB, mode, action, operation) {
+async function transaction(indexedDB, mode, action, operation, onResult = value => value) {
   const database = await openDatabase(indexedDB);
   try {
     return await new Promise((resolve, reject) => {
@@ -112,7 +112,10 @@ async function transaction(indexedDB, mode, action, operation) {
         tx.onabort = () => reject(storageFailure(tx.error || requestError, action));
         tx.onerror = () => { requestError = tx.error || requestError; };
         const request = operation(store);
-        request.onsuccess = () => { result = request.result; };
+        request.onsuccess = () => {
+          try { result = onResult(request.result, store); }
+          catch(error) { requestError=error;tx.abort(); }
+        };
         request.onerror = () => { requestError = request.error; };
       } catch (error) {
         if (tx) { try { tx.abort(); } catch {} }
@@ -139,6 +142,14 @@ export function createProfileStore({indexedDB = globalThis.indexedDB} = {}) {
     },
     async clear() {
       await transaction(indexedDB, 'readwrite', '清除', store => store.clear());
+    },
+    async clearIfSha256(expected) {
+      // Read and conditional deletion share a single write transaction. A newer
+      // upload in another tab can never be deleted based on an earlier read.
+      return transaction(indexedDB,'readwrite','清除',store=>store.get(KEY),(record,store)=>{
+        if(!record || record.sha256!==expected)return false;
+        store.delete(KEY);return true;
+      });
     },
   };
 }

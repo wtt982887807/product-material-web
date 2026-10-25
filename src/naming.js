@@ -16,6 +16,8 @@ const suffix = /(?:集合资产管理计划|单一资产管理计划|资产管�
 const short = value => String(value||'').trim().replace(suffix,'').replace(/[。；;]+$/,'');
 const omitParenthetical = value => value.replace(/[（(][^）)]*[）)]/g,'');
 const ignored = /[\s·•\-—（）()【】\[\]]/u;
+const compact = value => [...value].filter(c=>!ignored.test(c)).join('').toLowerCase();
+const productNumber = /[\d一二三四五六七八九十]+号$/u;
 function normalizedRange(text, candidate) {
   let normalized='', indices=[];
   for(let i=0;i<text.length;i++) if(!ignored.test(text[i])) {normalized+=text[i].toLowerCase();indices.push(i);}
@@ -31,6 +33,27 @@ function targetWithSameStyle(target, source, omitted) {
   else result=result.replace(/\(/g,'（').replace(/\)/g,'）');
   return result;
 }
+function filenameAbbreviation(stem, fullName) {
+  // Only the complete product-bearing filename body can prove an abbreviation.
+  // A number elsewhere in a channel heading or marketing phrase is not identity.
+  const header=stem.match(/^(?:\s*【[^】]*】\s*)*/u)[0];
+  const body=stem.slice(header.length),name=short(body.replace(/(?:产品要素)+$/u,''));
+  if(!productNumber.test(name)||(name.replace(productNumber,'').match(/\p{L}/gu)||[]).length<2)return null;
+  const match=normalizedRange(fullName,name);
+  if(!match||!match.start||compact(fullName.slice(match.end)))return null;
+  const start=header.length+body.indexOf(name);
+  return {name,start,end:start+name.length,omittedPrefix:fullName.slice(0,match.start)};
+}
+function abbreviatedTarget(target, source) {
+  // Reuse an evidenced omitted prefix. For an issuer rename, an unchanged full
+  // series followed by its contract number also proves the display abbreviation.
+  const series=source.name.replace(productNumber,''),match=normalizedRange(target,series);
+  if(match&&/^[\d一二三四五六七八九十]+号$/u.test(compact(target.slice(match.end))))return target.slice(match.start);
+  const prefix=normalizedRange(target,source.omittedPrefix);
+  if(prefix?.start===0&&compact(target.slice(prefix.end)))return target.slice(prefix.end);
+  // When both issuer and series differ, do not invent which new words to omit.
+  return target;
+}
 function updateProduct(stem, targetName, templateProductName) {
   const target=short(targetName), old=short(templateProductName);
   if(!target) throw new Error('合同尚未确定产品名称，不能生成文件名');
@@ -40,6 +63,14 @@ function updateProduct(stem, targetName, templateProductName) {
     const match=normalizedRange(stem,candidate);
     if(match) return stem.slice(0,match.start)+targetWithSameStyle(target,stem.slice(match.start,match.end),omitted)+stem.slice(match.end);
   }
+  for(const omitted of [false,true]) {
+    const candidate=omitted?omitParenthetical(old):old,source=filenameAbbreviation(stem,candidate);
+    if(source){
+      const display=abbreviatedTarget(omitted?omitParenthetical(target):target,source);
+      return stem.slice(0,source.start)+targetWithSameStyle(display,source.name,omitted)+stem.slice(source.end);
+    }
+  }
+  for(const candidate of [target,omitParenthetical(target)])if(filenameAbbreviation(stem,candidate))return stem;
   // A generic template filename may not contain a product name at all.
   if(!/[\d一二三四五六七八九十]+号/.test(stem)) return stem+' '+target;
   throw new Error('文件名中的原产品名称无法对应所选模板，请检查模板主体：'+stem);

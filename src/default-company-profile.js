@@ -5,7 +5,7 @@ const PROFILE = {
   "schemaVersion": 1,
   "name": "公司介绍2026.10版本.docx",
   "version": "2026.10",
-  "sha256": "e627c53304a4e01b72435054d64f373589ca724884177144986070f4f8356f6f",
+  "sha256": "42326e08f15f083c5bd0fe71b8e1363f3a962a80de63ab5b0fef929b7a6fcd56",
   "sections": [
     {
       "id": "section-1",
@@ -78,7 +78,7 @@ const PROFILE = {
             },
             {
               "key": "aum",
-              "text": "截至2025年6月末，公司资产管理规模超8800亿元*",
+              "text": "截至2026年6月末，公司资产管理规模超8800亿元*",
               "start": 0,
               "paragraphId": "word/document.xml#p-7",
               "part": "word/document.xml",
@@ -182,7 +182,7 @@ const PROFILE = {
         },
         {
           "paragraphId": "word/document.xml#p-7",
-          "text": "截至2025年6月末，公司资产管理规模超8800亿元*"
+          "text": "截至2026年6月末，公司资产管理规模超8800亿元*"
         },
         {
           "paragraphId": "word/document.xml#p-8",
@@ -408,7 +408,7 @@ const PROFILE = {
       "paragraphId": "word/document.xml#p-7",
       "part": "word/document.xml",
       "index": 7,
-      "text": "截至2025年6月末，公司资产管理规模超8800亿元*"
+      "text": "截至2026年6月末，公司资产管理规模超8800亿元*"
     },
     {
       "paragraphId": "word/document.xml#p-8",
@@ -488,4 +488,9 @@ const PROFILE = {
 /** Return an independent, serializable profile; no DOCX read is needed. */
 export function loadDefaultCompanyProfile() {
   return JSON.parse(JSON.stringify(PROFILE));
+}
+
+/** Only this exact user-corrected source is superseded, never a same-name upload. */
+export function isSupersededCompanyProfile(profile) {
+  return profile?.sha256 === 'e627c53304a4e01b72435054d64f373589ca724884177144986070f4f8356f6f';
 }
