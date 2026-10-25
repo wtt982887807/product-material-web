@@ -5,6 +5,13 @@ export function currentMonth(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone:'Asia/Shanghai', year:'numeric', month:'2-digit' }).formatToParts(date);
   return parts.find(p=>p.type==='year').value + parts.find(p=>p.type==='month').value;
 }
+export function resolveProductionMonth({manualValue,now=new Date()}={}) {
+  if(manualValue===undefined)return currentMonth(now);
+  const value=String(manualValue).trim();
+  if(!/^20\d{2}-?(?:0[1-9]|1[0-2])$/.test(value))throw new Error('请选择有效的制作月份，例如2026年10月。');
+  return value.replace('-','');
+}
+export function monthInputValue(month){const value=resolveProductionMonth({manualValue:month});return value.slice(0,4)+'-'+value.slice(4);}
 const suffix = /(?:集合资产管理计划|单一资产管理计划|资产管理计划|集合资金信托计划|资金信托计划|信托计划)[。；;\s]*$/;
 const short = value => String(value||'').trim().replace(suffix,'').replace(/[。；;]+$/,'');
 const omitParenthetical = value => value.replace(/[（(][^）)]*[）)]/g,'');
