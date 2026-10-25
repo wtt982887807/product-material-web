@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import JSZip from 'jszip';
 import {DOMParser,XMLSerializer} from '@xmldom/xmldom';
+import fixture from './doc-fixture.cjs';
+import * as inputReader from '../src/word-input.js';
 globalThis.JSZip=JSZip;globalThis.DOMParser=DOMParser;globalThis.XMLSerializer=XMLSerializer;
 const {readWordTemplate}=await import('../src/word-input.js');
 const W='http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -13,8 +15,54 @@ test('a binary DOC is converted once and the source digest stays available for d
 test('complex DOCX revisions automatically use the full engine then re-enter the normal reader',async()=>{const z=await JSZip.loadAsync(await docx());const xml=await z.file('word/document.xml').async('string');z.file('word/document.xml',xml.replace('<w:p>','<w:p><w:pPr><w:rPr><w:del w:id="8"/></w:rPr></w:pPr>'));let calls=0;const result=await readWordTemplate({name:'复杂.docx',bytes:await z.generateAsync({type:'uint8array'})},{convert:async()=>{calls++;return docx();}});assert.equal(calls,1);assert.equal(result.paragraphs[0].text,'产品名称：示例产品');assert.match(result.warnings.join(''),/旧修订/);});
 test('arbitrary damaged inputs do not launch the full engine',async()=>{let calls=0;await assert.rejects(readWordTemplate({name:'坏文件.docx',bytes:new Uint8Array([1,2,3])},{convert:async()=>{calls++;return docx();}}),/识别|损坏|读取/);assert.equal(calls,0);});
 test('a failed conversion remains an actionable failure and never masquerades as a DOCX',async()=>{await assert.rejects(readWordTemplate({name:'旧模板.doc',bytes:oldDoc},{convert:async()=>oldDoc}),/DOCX|转换/);});
+test('successful conversion retains optional shading warnings for material review',async()=>{
+ const result=await readWordTemplate({name:'旧底纹模板.doc',bytes:oldDoc},{convert:async(_file,{onWarning})=>{onWarning?.({code:'DOC_SHADING_FALLBACK',message:'已由完整 Word 引擎转换，请核对表格底色。'});return docx();}});
+ assert.ok(result.warnings.some(w=>w.code==='DOC_SHADING_FALLBACK'&&/底色/.test(w.message)));
+ assert.equal(result.paragraphs[0].text,'产品名称：示例产品');
+});
 test('a macro-enabled Word package cannot be relabeled as ordinary DOCX without conversion',async()=>{
  const zip=await JSZip.loadAsync(await docx());zip.file('[Content_Types].xml',(await zip.file('[Content_Types].xml').async('string')).replace('application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml','application/vnd.ms-word.document.macroEnabled.main+xml'));zip.file('word/vbaProject.bin',new Uint8Array([1,2]));let calls=0;
  const result=await readWordTemplate({name:'带宏包.doc',bytes:await zip.generateAsync({type:'uint8array'})},{convert:async()=>{calls++;return docx();}});
  assert.equal(calls,1);assert.equal(result.zip.file('word/vbaProject.bin'),null);
+});
+
+test('contract reader recognizes DOCX content under a DOC name without full conversion',async()=>{
+ const bytes=await docx();let calls=0;
+ const result=await inputReader.readWordContract({name:'合同.doc',bytes},{convert:async()=>{calls++;return docx();}});
+ assert.equal(calls,0);assert.equal(result.name,'合同.doc');assert.equal(result.blocks[0].text,'产品名称：示例产品');
+ assert.equal(result.sourceSha256,result.sha256);assert.match(result.warnings.join(''),/实际.*DOCX/);
+});
+
+test('ordinary binary contracts keep their fast reader even under a DOCX filename',async()=>{
+ globalThis.self=globalThis;await import('../vendor/docToText.js');let calls=0;
+ const result=await inputReader.readWordContract({name:'合同.docx',bytes:fixture.buildDoc()},{convert:async()=>{calls++;return docx();}});
+ assert.equal(calls,0);assert.equal(result.blocks.map(b=>b.text).join('\n').trim(),fixture.EXPECTED.trim());
+ assert.equal(result.sourceSha256,result.sha256);assert.equal(result.name,'合同.docx');
+});
+
+test('a binary contract unsupported by the fast reader is fully converted once with source identity retained',async()=>{
+ const saved=globalThis.docToText;globalThis.docToText=Object.assign(()=>null,{sections:()=>null});
+ try{
+  const bytes=fixture.buildDoc();let calls=0;
+  const result=await inputReader.readWordContract({name:'兼容合同.doc',bytes},{convert:async(file,{onWarning})=>{calls++;assert.deepEqual(file.bytes,bytes);onWarning({code:'DOC_SHADING_FALLBACK',message:'转换后请核对底色。'});return docx();}});
+  assert.equal(calls,1);assert.equal(result.blocks[0].text,'产品名称：示例产品');assert.equal(result.sha256,result.sourceSha256);assert.notEqual(result.sha256,result.preparedSha256);
+  assert.ok(result.warnings.some(w=>w.code==='DOC_SHADING_FALLBACK'));assert.match(result.warnings.filter(w=>typeof w==='string').join(''),/合同.*完整.*引擎/);
+ }finally{globalThis.docToText=saved;}
+});
+
+test('complex old revisions in a contract use the same complete conversion path as templates',async()=>{
+ const zip=await JSZip.loadAsync(await docx());zip.file('word/document.xml',(await zip.file('word/document.xml').async('string')).replace('<w:p>','<w:p><w:pPr><w:rPr><w:del w:id="8"/></w:rPr></w:pPr>'));
+ let calls=0;const result=await inputReader.readWordContract({name:'复杂合同.docx',bytes:await zip.generateAsync({type:'uint8array'})},{convert:async()=>{calls++;return docx();}});
+ assert.equal(calls,1);assert.equal(result.blocks[0].text,'产品名称：示例产品');
+});
+
+test('contract conversion cannot turn corrupt bytes or an empty document into contract evidence',async()=>{
+ let calls=0;
+ for(const bytes of [new Uint8Array(),new Uint8Array([1,2,3])])await assert.rejects(inputReader.readWordContract({name:'坏合同.doc',bytes},{convert:async()=>{calls++;return docx();}}),/识别|损坏|正文/);
+ assert.equal(calls,0);
+ const zip=await JSZip.loadAsync(await docx());zip.file('word/document.xml',`<w:document xmlns:w="${W}"><w:body><w:p/></w:body></w:document>`);
+ await assert.rejects(inputReader.readWordContract({name:'空合同.docx',bytes:await zip.generateAsync({type:'uint8array'})}),/正文/);
+ const saved=globalThis.docToText;globalThis.docToText=Object.assign(()=>null,{sections:()=>null});
+ try{await assert.rejects(inputReader.readWordContract({name:'不可读合同.doc',bytes:fixture.buildDoc()},{convert:async()=>{throw new Error('文档已加密，无法转换');}}),/加密/);}
+ finally{globalThis.docToText=saved;}
 });

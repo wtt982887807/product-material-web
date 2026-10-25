@@ -53,7 +53,7 @@ const record = value => ({...value, bytes: new Uint8Array([1])});
 // Execute the real app event handlers with small DOM/import boundary fakes.
 // No browser, storage, Office files or network is used; naming and supplements
 // retain their production implementations.
-function createApp({store, parseCompanyProfile, onAnalyze, onWrite, onDownload} = {}) {
+function createApp({store, parseCompanyProfile, onAnalyze, onWrite, onDownload, readWordTemplate, readWordContract} = {}) {
   const elements = new Map(ids.map(id => [id, new Element()]));
   const document = {
     getElementById(id) { assert.ok(elements.has(id), `Missing page element: ${id}`); return elements.get(id); },
@@ -73,7 +73,8 @@ function createApp({store, parseCompanyProfile, onAnalyze, onWrite, onDownload} 
       readTemplate: async ({name}) => ({id: 'template', name, sha256: 'template', kind: 'docx', paragraphs: []}),
     },
     './word-input.js': {
-      readWordTemplate: async ({name}) => ({id: 'template', name:name.replace(/\.(doc|rtf)$/i,'.docx'), sha256: 'template', kind: 'docx', paragraphs: []}),
+      readWordContract: readWordContract || (async ({name})=>({name,sha256:'contract'})),
+      readWordTemplate: readWordTemplate || (async ({name}) => ({id: 'template', name:name.replace(/\.(doc|rtf)$/i,'.docx'), sha256: 'template', kind: 'docx', paragraphs: []})),
     },
     './review-engine.js': {
       analyzeMaterials(contract, templates, options) {
@@ -89,15 +90,15 @@ function createApp({store, parseCompanyProfile, onAnalyze, onWrite, onDownload} 
     },
     './office-writer.js': {
       async writeTask(task) {
-        await onWrite?.(task);
-        return {files: [{name: `示例_${task.month}.docx`, bytes: new Uint8Array([1]), mime: 'application/octet-stream'}]};
+        const result=await onWrite?.(task);
+        return result?.files ? result : {files: [{name: `示例_${task.month}.docx`, bytes: new Uint8Array([1]), mime: 'application/octet-stream'}]};
       },
     },
   };
-  let urlNumber = 0;
+  let urlNumber = 0;const blobs=new Map();
   const context = vm.createContext({
     ...naming, document, Date, Intl, Uint8Array, Blob, JSZip,
-    URL: {createObjectURL: () => `blob:test-${++urlNumber}`, revokeObjectURL() {}},
+    URL: {createObjectURL: blob => {const url=`blob:test-${++urlNumber}`;blobs.set(url,blob);return url;}, revokeObjectURL() {}},
     requestAnimationFrame: callback => queueMicrotask(callback),
     window: {scrollTo() {}},
     importModule: async path => { assert.ok(modules[path], `Unexpected app import: ${path}`); return modules[path]; },
@@ -108,13 +109,61 @@ function createApp({store, parseCompanyProfile, onAnalyze, onWrite, onDownload} 
     .replace(/restoreCompany\(\);(?=\s*$)/, 'globalThis.appReady=restoreCompany();');
   vm.runInContext(source, context, {filename: 'src/app.js'});
   assert.ok(context.appReady, 'App startup still exposes its initial restore boundary');
-  return {elements, state: vm.runInContext('state', context), ready: context.appReady};
+  return {elements, state: vm.runInContext('state', context), ready: context.appReady,blobs};
 }
 
 async function chooseMaterials(app) {
   await app.elements.get('contract-input').dispatch('change', {target: {files: [file('示例合同.docx')]}});
   await app.elements.get('templates-input').dispatch('change', {target: {files: [file('示例模板.docx', 2)]}});
 }
+
+test('one unreadable template does not prevent reviewing and downloading the other template',async()=>{
+ const app=createApp({readWordTemplate:async({name})=>{if(name.includes('损坏'))throw new Error('文件包损坏');return {id:name,name,sha256:name,kind:'docx',paragraphs:[]};}});
+ await app.ready;await chooseMaterials(app);
+ await app.elements.get('templates-input').dispatch('change',{target:{files:[file('损坏模板.docx',3)]}});
+ await app.elements.get('analyze-button').click();
+ assert.equal(app.state.task.materials.length,1);
+ assert.equal(app.state.task.inputIssues[0].sourceName,'损坏模板.docx');
+ assert.match(descendants(app.elements.get('warnings')).map(e=>e.textContent).join('\n'),/损坏模板.*未处理.*文件包损坏/);
+ await app.elements.get('generate-button').click();
+ assert.match(app.elements.get('generation-status').textContent,/1.*未生成/);
+ assert.ok(app.elements.get('download-list').children.some(n=>n.tagName==='a'));
+});
+
+test('duplicate templates and the accidentally selected contract are skipped without blocking valid material',async()=>{
+ const app=createApp({readWordTemplate:async({name})=>({id:name,name,sha256:name.includes('合同')?'contract':'same-template',kind:'docx',paragraphs:[]})});
+ await app.ready;await chooseMaterials(app);
+ await app.elements.get('templates-input').dispatch('change',{target:{files:[file('副本模板.docx',3),file('误选合同.docx',4)]}});
+ await app.elements.get('analyze-button').click();
+ assert.equal(app.state.task.materials.length,1);
+ assert.deepEqual(Array.from(app.state.task.inputIssues,i=>i.reason),['duplicate','contract']);
+});
+
+test('when no valid templates remain the app gives file-specific reasons instead of an empty success',async()=>{
+ const app=createApp({readWordTemplate:async()=>{throw new Error('缺少正文');}});
+ await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ assert.equal(app.state.task,null);assert.match(app.elements.get('error-message').textContent,/没有可更新.*示例模板.*缺少正文/);
+});
+
+test('partial generation exposes every missing file while preserving successful downloads and review notes',async()=>{
+ const app=createApp({onWrite:()=>({files:[{name:'正常.docx',bytes:new Uint8Array([1]),mime:'application/octet-stream',report:{repairs:['已移除失效跳转']}}],failures:[{sourceName:'未完成.pptx',message:'图片缺失'}]}),onDownload:()=>{}});
+ await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ await app.elements.get('generate-button').click();
+ assert.match(app.elements.get('generation-status').textContent,/1.*未生成/);
+ const text=descendants(app.elements.get('download-list')).map(e=>e.textContent).join('\n');
+ assert.match(text,/未完成\.pptx.*图片缺失/);assert.match(text,/已移除失效跳转/);
+ assert.ok(app.elements.get('download-list').children.some(n=>n.download==='正常.docx'));
+ const bundle=app.elements.get('download-list').children.find(n=>n.download?.endsWith('.zip'));
+ const zip=await JSZip.loadAsync(await app.blobs.get(bundle.href).arrayBuffer());
+ assert.match(await zip.file('审阅清单.txt').async('string'),/未生成 未完成\.pptx.*图片缺失/);
+ assert.match(await zip.file('审阅清单.txt').async('string'),/已移除失效跳转/);
+});
+
+test('the contract entry uses the same signature-aware Word compatibility reader',async()=>{
+ let reads=0;const app=createApp({readWordContract:async({name})=>{reads++;return {name,sha256:'contract',warnings:['已自动兼容合同格式']};}});
+ await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ assert.equal(reads,1);assert.equal(app.state.task.contract.warnings[0],'已自动兼容合同格式');
+});
 
 test('delivery previews use contract fallback and distinguish colliding template names',async()=>{
  const app=createApp();await app.ready;await chooseMaterials(app);

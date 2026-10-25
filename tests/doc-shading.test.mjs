@@ -144,6 +144,24 @@ test('preserves a shading property reached through mini-stream Table and Data', 
   assert.deepEqual(f.bytes, original);
 });
 
+test('accepts a final partially padded sector when every declared stream byte is present',()=>{
+ const f=fixture({huge:true}),bytes=new Uint8Array(f.bytes.length+32);bytes.set(f.bytes);
+ const dv=new DataView(bytes.buffer);
+ dv.setUint32(SECTOR+3*128+120,4096+32,true);
+ dv.setUint32(f.fatAt+25*4,26,true);dv.setUint32(f.fatAt+26*4,END,true);
+ const original=bytes.slice(),output=normalizeLegacyDocShading(bytes);
+ assert.equal(output.length,bytes.length);assert.deepEqual(bytes,original);
+ assert.deepEqual(changedBytes(bytes,output),[f.groupAt+f.group.length-13]);
+});
+
+test('never treats missing logical stream bytes as harmless final-sector padding',()=>{
+ const f=fixture({huge:true}),bytes=new Uint8Array(f.bytes.length+31);bytes.set(f.bytes);
+ const dv=new DataView(bytes.buffer);
+ dv.setUint32(SECTOR+3*128+120,4096+32,true);
+ dv.setUint32(f.fatAt+25*4,26,true);dv.setUint32(f.fatAt+26*4,END,true);
+ assert.throws(()=>normalizeLegacyDocShading(bytes),/数据|越界/);
+});
+
 test('handles legacy HugePapx and PTableProps pointer forms', () => {
   for (const hugeOpcode of [0x6645, 0x646B]) {
     const f = fixture({huge: true, hugeOpcode});

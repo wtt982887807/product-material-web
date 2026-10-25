@@ -30,6 +30,13 @@ async function profile(){return parseCompanyProfile(await doc(narrative()+kpi())
 function task(t){return{facts:[],materials:[{materialId:t.id,kind:'word',template:t,fields:[],operations:[],warnings:[]}],warnings:[],stats:{}};}
 function revised(m,id){let s=m.template.paragraphs.find(p=>p.id===id).text;for(const o of m.operations.filter(o=>o.paragraphId===id&&o.kind==='replace').sort((a,b)=>b.start-a.start))s=s.slice(0,o.start)+o.after+s.slice(o.start+o.before.length);return s;}
 
+test('structured Word conversion warnings survive company review without blocking it',async()=>{
+ const t=await readTemplate(await doc(narrative()));const x=task(t),warning={code:'DOC_SHADING_FALLBACK',message:'请核对转换后的表格底色'};
+ x.warnings.push(warning);x.materials[0].warnings.push(warning);
+ applyCompanyProfile(x,await profile());applyCompanyProfile(x,await profile());
+ assert.ok(x.warnings.includes(warning));assert.ok(x.materials[0].warnings.includes(warning));
+});
+
 test('profile is serializable, reads both layouts independently and leaves source bytes intact',async()=>{
  const file=await doc(narrative()+kpi());const original=file.bytes.slice();const x=await parseCompanyProfile(file);
  assert.equal(x.version,'2032.04');assert.match(x.sha256,/^[0-9a-f]{64}$/);assert.deepEqual(x,JSON.parse(JSON.stringify(x)));assert.deepEqual(file.bytes,original);

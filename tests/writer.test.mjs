@@ -51,7 +51,7 @@ async function presentationFixture({duplicateAuthors=false,usedDuplicate=false,l
  const overrides=[['ppt/presentation.xml','application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml']];
  for(let i=1;i<=3;i++){
    const part=`ppt/slides/slide${i}.xml`;
-   const xml=`<p:sld xmlns:p="${P}" xmlns:a="${A}" xmlns:r="${R}"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="${i}" name="要素"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="158750" y="317500"/><a:ext cx="1000" cy="1000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p>${ar(`第${i}页；原产品；收益`)}${ar('3.80%')}${ar('；评级R3。')}</a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`;
+   const xml=`<p:sld xmlns:p="${P}" xmlns:a="${A}" xmlns:r="${R}"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="${i}" name="要素">${i===2&&linkExcluded?'<a:hlinkClick r:id="rId2" action="ppaction://hlinksldjump"/>':''}</p:cNvPr><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="158750" y="317500"/><a:ext cx="1000" cy="1000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p>${ar(`第${i}页；原产品；收益`)}${ar('3.80%')}${ar('；评级R3。')}</a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`;
    zip.file(part,xml);const doc=parse(xml);parts.set(part,doc);
    const node=els(doc,A,'p')[0];paragraphs.push({id:`p${i}`,part,index:0,node,page:i,text:els(node,A,'t').map(t=>t.textContent).join('')});slides.push({page:i,part,title:`第${i}页`,paragraphIds:[`p${i}`]});
    const rr=[['rId1','slideLayout','../slideLayouts/slideLayout1.xml']];
@@ -110,9 +110,36 @@ test('PPT emits real positioned comments and exact highlight; selected source pa
  assert.equal(out.report.structuralValidation,true);assert.deepEqual(out.report.slideMapping.map(x=>x.sourcePage),[2,3]);assert.equal(out.report.repairs[0].removedCount,1);
 });
 
-test('PPT refuses ambiguous used duplicate authors and links into excluded slides',async()=>{
+test('PPT refuses ambiguous used duplicate authors',async()=>{
  const write=await writer();const t=await presentationFixture({duplicateAuthors:true,usedDuplicate:true});await assert.rejects(write(review(t,[],[2,3]),options),/批注.*作者|作者.*重复/);
- const linked=await presentationFixture({linkExcluded:true});await assert.rejects(write(review(linked,[],[2,3]),options),/删除|移除|排除/);
+});
+
+test('PPT removes only navigation into excluded pages and preserves visible content and valid links',async()=>{
+ const t=await presentationFixture({linkExcluded:true}),part='ppt/slides/slide2.xml',doc=t.parts.get(part);
+ const hover=doc.createElementNS(A,'a:hlinkMouseOver');hover.setAttributeNS(R,'r:id','rId3');hover.setAttribute('action','ppaction://hlinksldjump');els(doc,P,'cNvPr')[0].appendChild(hover);
+ t.zip.file('ppt/slides/_rels/slide2.xml.rels',rels([['rId1','slideLayout','../slideLayouts/slideLayout1.xml'],['rId2','slide','slide1.xml'],['rId3','slide','slide3.xml']]));
+ t.zip.file(part,new XMLSerializer().serializeToString(doc));t.bytes=await t.zip.generateAsync({type:'uint8array'});
+ const originalText=els(doc,A,'t').map(n=>n.textContent).join(''),out=await(await writer())(review(t,[],[2,3]),options),zip=await JSZip.loadAsync(out.bytes),output=parse(await zip.file(part).async('string'));
+ assert.equal(els(output,A,'t').map(n=>n.textContent).join(''),originalText);assert.equal(els(output,A,'hlinkClick').length,0);assert.equal(els(output,A,'hlinkMouseOver')[0].getAttributeNS(R,'id'),'rId3');
+ const outputRels=parse(await zip.file('ppt/slides/_rels/slide2.xml.rels').async('string'));assert.deepEqual(els(outputRels,PR,'Relationship').map(n=>n.getAttribute('Id')),['rId1','rId3']);
+ assert.deepEqual(await zip.file('ppt/media/image1.png').async('uint8array'),new Uint8Array([1,2,3,4]));assert.equal(zip.file('ppt/slides/slide1.xml'),null);
+ assert.ok(out.report.repairs.some(r=>r.kind==='removedSlideNavigation'&&r.part===part&&r.removedCount===1&&r.message));
+});
+
+test('PPT relative navigation is removed only when pages are trimmed; poster navigation remains',async()=>{
+ const t=await presentationFixture(),part='ppt/slides/slide2.xml',doc=t.parts.get(part);
+ for(const kind of ['hlinkClick','hlinkMouseOver']){const node=doc.createElementNS(A,'a:'+kind);node.setAttribute('action','ppaction://hlinkshowjump?jump=nextslide');els(doc,P,'cNvPr')[0].appendChild(node);}
+ t.zip.file(part,new XMLSerializer().serializeToString(doc));t.bytes=await t.zip.generateAsync({type:'uint8array'});
+ const write=await writer(),out=await write(review(t,[],[2,3]),options),zip=await JSZip.loadAsync(out.bytes),output=parse(await zip.file(part).async('string'));
+ assert.equal(els(output,A,'hlinkClick').length,0);assert.equal(els(output,A,'hlinkMouseOver').length,0);assert.ok(out.report.repairs.some(r=>r.kind==='removedRelativeNavigation'&&r.removedCount===2&&r.message));
+ const poster=await write({...review(t,[],[2]),kind:'poster'},options),posterZip=await JSZip.loadAsync(poster.bytes),posterDoc=parse(await posterZip.file(part).async('string'));
+ assert.equal(els(posterDoc,A,'hlinkClick').length,1);assert.equal(els(posterDoc,A,'hlinkMouseOver').length,1);assert.ok(!poster.report.repairs.some(r=>r.kind==='removedRelativeNavigation'));
+});
+
+test('PPT refuses non-navigation dependencies on excluded pages',async()=>{
+ const t=await presentationFixture({linkExcluded:true}),part='ppt/slides/slide2.xml',doc=t.parts.get(part);
+ els(doc,P,'cNvPr')[0].setAttributeNS(R,'r:embed','rId2');t.zip.file(part,new XMLSerializer().serializeToString(doc));t.bytes=await t.zip.generateAsync({type:'uint8array'});
+ await assert.rejects((await writer())(review(t,[],[2,3]),options),/排除|导航|依赖/);
 });
 
 test('poster exports every page without source-page trimming',async()=>{

@@ -1,14 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import JSZip from 'jszip';
+import {DOMParser,XMLSerializer} from '@xmldom/xmldom';
 import {createLegacyWordConverter} from '../src/legacy-word-converter.js';
 import {convertUnoDocument} from '../converter/uno-convert.js';
 
 globalThis.JSZip = JSZip;
+globalThis.DOMParser=DOMParser;globalThis.XMLSerializer=XMLSerializer;
+const W='http://schemas.openxmlformats.org/wordprocessingml/2006/main',R='http://schemas.openxmlformats.org/officeDocument/2006/relationships',PR='http://schemas.openxmlformats.org/package/2006/relationships';
 async function docx() {
   const zip = new JSZip();
   zip.file('[Content_Types].xml', '<Types><Override ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
-  zip.file('word/document.xml', '<w:document/>');
+  zip.file('word/document.xml', `<w:document xmlns:w="${W}"><w:body><w:p><w:r><w:t>合同正文</w:t></w:r></w:p></w:body></w:document>`);
   return zip.generateAsync({type: 'uint8array'});
 }
 
@@ -67,6 +70,51 @@ test('an invalid engine result is rejected instead of being renamed DOCX', async
   })});
   await assert.rejects(convert({name: 'a.doc', bytes: new Uint8Array([1])}), /DOCX|转换结果/);
   assert.equal(destroyed, true);
+});
+
+test('unsupported optional DOC shading uses untouched input in the full engine and reports a warning',async()=>{
+ const bytes=new Uint8Array([0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1,0,1]),original=bytes.slice(),output=await docx(),warnings=[],progress=[];
+ let calls=0;
+ const convert=createLegacyWordConverter({isIsolated:()=>true,createRuntime:async()=>({destroy(){},async convert(input){calls++;assert.deepEqual(input.bytes,original);return output;}})});
+ assert.deepEqual(await convert({name:'旧底纹模板.doc',bytes},{onWarning:item=>warnings.push(item),onProgress:item=>progress.push(item)}),output);
+ assert.equal(calls,1);assert.deepEqual(bytes,original);
+ assert.equal(warnings.length,1);assert.equal(warnings[0].code,'DOC_SHADING_FALLBACK');
+ assert.match(warnings[0].message,/底纹|底色/);assert.match(warnings[0].message,/完整.*引擎/);
+ assert.ok(progress.some(item=>item.stage==='warning'));
+});
+
+test('shading fallback cannot bypass a failed or invalid full conversion',async()=>{
+ const bytes=new Uint8Array([0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1,0,1]);let called=0;
+ const convert=createLegacyWordConverter({isIsolated:()=>true,createRuntime:async()=>({destroy(){},async convert(){called++;return bytes;}})});
+ await assert.rejects(convert({name:'旧底纹模板.doc',bytes}),/转换结果不是有效 DOCX/);assert.equal(called,1);
+});
+
+test('converted orphan comment anchors are repaired without deleting existing comments, text or package parts',async()=>{
+ const zip=await JSZip.loadAsync(await docx());
+ const paragraph=`<w:p><w:commentRangeStart w:id="1"/><w:r><w:t>应当保留的正文</w:t></w:r><w:commentRangeEnd w:id="1"/><w:r><w:commentReference w:id="1"/></w:r><w:commentRangeStart w:id="9"/><w:r><w:rPr><w:b/></w:rPr><w:t>以及原有格式</w:t></w:r><w:commentRangeEnd w:id="9"/><w:r><w:commentReference w:id="9"/></w:r></w:p>`;
+ zip.file('word/document.xml',`<w:document xmlns:w="${W}"><w:body>${paragraph}</w:body></w:document>`);
+ const comments=`<w:comments xmlns:w="${W}"><w:comment w:id="1" w:author="旧作者"><w:p><w:r><w:t>必须完整保留的旧批注</w:t></w:r></w:p></w:comment></w:comments>`;
+ zip.file('word/annotations.xml',comments);
+ zip.file('word/_rels/document.xml.rels',`<Relationships xmlns="${PR}"><Relationship Id="rId1" Type="${R}/comments" Target="annotations.xml"/></Relationships>`);
+ zip.file('word/footer1.xml',`<w:ftr xmlns:w="${W}"><w:p><w:r><w:t>页脚原文</w:t><w:commentReference w:id="9"/></w:r></w:p></w:ftr>`);
+ zip.file('word/media/retained.bin',new Uint8Array([1,2,3]));const output=await zip.generateAsync({type:'uint8array'}),original=output.slice(),warnings=[];
+ const convert=createLegacyWordConverter({isIsolated:()=>true,createRuntime:async()=>({destroy(){},async convert(){return output;}})});
+ const result=await JSZip.loadAsync(await convert({name:'example.rtf',bytes:new TextEncoder().encode('{\\rtf1 example}')},{onWarning:item=>warnings.push(item)}));
+ assert.deepEqual(output,original);
+ const parser=new DOMParser();const document=parser.parseFromString(await result.file('word/document.xml').async('string'),'application/xml');
+ assert.equal(Array.from(document.getElementsByTagNameNS(W,'t')).map(n=>n.textContent).join(''),'应当保留的正文以及原有格式');assert.equal(document.getElementsByTagNameNS(W,'b').length,1);
+ for(const local of ['commentRangeStart','commentRangeEnd','commentReference'])assert.deepEqual(Array.from(document.getElementsByTagNameNS(W,local)).map(n=>n.getAttributeNS(W,'id')),['1']);
+ assert.equal(await result.file('word/annotations.xml').async('string'),comments);
+ assert.equal(parser.parseFromString(await result.file('word/footer1.xml').async('string'),'application/xml').getElementsByTagNameNS(W,'commentReference').length,0);
+ assert.deepEqual(await result.file('word/media/retained.bin').async('uint8array'),new Uint8Array([1,2,3]));
+ assert.deepEqual(Object.keys(result.files),Object.keys(zip.files));
+ assert.equal(warnings.length,1);assert.equal(warnings[0].code,'WORD_ORPHAN_COMMENTS_REPAIRED');assert.match(warnings[0].message,/旧批注|空引用/);
+});
+
+test('converted malformed XML cannot be hidden by comment repair',async()=>{
+ const zip=await JSZip.loadAsync(await docx());zip.file('word/document.xml',`<w:document xmlns:w="${W}"><w:body><w:p></w:body></w:document>`);
+ const output=await zip.generateAsync({type:'uint8array'}),convert=createLegacyWordConverter({isIsolated:()=>true,createRuntime:async()=>({destroy(){},async convert(){return output;}})});
+ await assert.rejects(convert({name:'example.rtf',bytes:new Uint8Array([1])}),/XML|结构检查/);
 });
 
 function uno({accepts = true} = {}) {
