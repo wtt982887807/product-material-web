@@ -1,0 +1,14 @@
+node_modules/
+_qa/
+_private/
+web-private/
+.superpowers/
+*.doc
+*.docx
+*.pptx
+*.pdf
+*.xlsx
+*.zip
+.env*
+__pycache__/
+*.log

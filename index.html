@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="根据合同更新产品要素，保留模板原话术与格式。在浏览器本地读取并导出 Word 和 PowerPoint。">
+  <title>产品要素工作台</title><link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="./" aria-label="产品要素工作台首页"><span class="brand-mark">P</span><span>产品要素工作台<small>PRODUCT MATERIALS</small></span></a><div class="top-meta"><span class="local-dot"></span>文件在本机处理<a href="https://github.com/wtt982887807/product-material-web" target="_blank" rel="noopener">使用说明 ↗</a></div></header>
+  <main>
+    <section class="intro"><div><p class="eyebrow">合同为依据 · 模板为底稿</p><h1>更新要素，保留你的表达。</h1><p class="intro-copy">上传合同和近似产品模板。共同要素统一核对，差异局部修改，未确定的参数保留原值供审阅。</p></div><div class="month-card"><span>本次制作月份</span><strong id="month-value">—</strong><small>用于输出文件名</small></div></section>
+    <ol class="steps" aria-label="处理步骤"><li class="active" id="step-upload"><b>01</b> 选择文件</li><li id="step-review"><b>02</b> 核对要素</li><li id="step-download"><b>03</b> 下载物料</li></ol>
+    <section class="workspace" id="upload-section">
+      <div class="section-heading"><div><h2>准备这次的文件</h2><p>一份目标产品合同，以及至少一份模板。</p></div><span class="section-note">模板可与合同产品不同名</span></div>
+      <div class="upload-grid">
+        <div class="upload-card contract-card" id="contract-drop"><div class="file-icon">合同</div><h3>目标产品合同 <span class="required">必选</span></h3><p>DOCX / DOC · 仅选一份</p><label class="file-button" for="contract-input">选择合同</label><input id="contract-input" type="file" accept=".docx,.doc"><div class="file-list" id="contract-files" aria-live="polite"></div></div>
+        <div class="upload-card" id="templates-drop"><div class="file-icon light">模板</div><h3>要更新的物料 <span class="required">至少一份</span></h3><p>PPT、一页通或海报 · DOCX / PPTX</p><label class="file-button secondary" for="templates-input">选择模板，可多选</label><input id="templates-input" type="file" accept=".docx,.pptx" multiple><div class="file-list" id="template-files" aria-live="polite"></div></div>
+      </div>
+      <div class="scope-note"><strong>本次只更新产品要素</strong><span>营销图文、历史业绩及人员介绍保持原样。PPT只输出自身要素页及续页，Word保留本轮修订。</span></div>
+      <div class="action-row"><p id="selection-hint">选好文件后，开始核对。</p><button class="primary-button" id="analyze-button" disabled>开始核对 <span>→</span></button></div>
+    </section>
+    <section class="progress-panel" id="progress-panel" hidden aria-live="polite"><div class="spinner"></div><div><strong id="progress-title">正在读取文件</strong><p id="progress-detail">共同要素只核对一次。</p></div></section>
+    <section class="error-panel" id="error-panel" hidden role="alert"><strong>这一步需要处理</strong><p id="error-message"></p><button class="text-button" id="dismiss-error">收起提示</button></section>
+    <section id="review-section" hidden>
+      <div class="review-heading"><div><p class="eyebrow">本次目标产品</p><h2 id="target-name"></h2><p id="review-subtitle"></p></div><button class="secondary-button" id="reset-button">重新选择文件</button></div>
+      <div class="summary-grid"><div><span>共享要素</span><strong id="count-facts">0</strong></div><div><span>有依据的修改</span><strong id="count-updates">0</strong></div><div><span>保留待核</span><strong class="amber" id="count-pending">0</strong></div><div><span>输出物料</span><strong id="count-materials">0</strong></div></div>
+      <div id="warnings" class="warnings"></div>
+      <div class="review-layout"><section class="facts-panel"><div class="panel-header"><h3>要素核对</h3><div class="filters" role="group" aria-label="筛选要素"><button class="selected" data-filter="focus">需关注</button><button data-filter="all">全部</button><button data-filter="pending">待核</button></div></div><div id="facts-list"></div></section><aside class="delivery-panel"><h3>本次输出</h3><div id="delivery-list"></div><p class="delivery-note">黄色表示原值仍需确认，不影响生成审阅稿。下载后可在 Word 中查看修订与批注。</p><button class="primary-button full" id="generate-button">生成并下载物料</button><div id="download-list" aria-live="polite"></div></aside></div>
+    </section>
+    <section class="how-it-works"><div><span>01</span><strong>同一事实，统一核对</strong><p>保留各模板自己的句式与位置。</p></div><div><span>02</span><strong>缺项保留，局部标黄</strong><p>不把旧值删成整段“待补充”。</p></div><div><span>03</span><strong>产品更新，月份自动</strong><p>制作月份只用于文件命名。</p></div></section>
+  </main>
+  <footer><span>产品要素工作台 · 本地文件处理</span><span>合同与模板不会上传到网站服务器。</span></footer>
+  <script src="vendor/jszip.min.js"></script><script src="vendor/docToText.js"></script><script type="module" src="src/app.js"></script>
+</body>
+</html>

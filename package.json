@@ -1,0 +1,1 @@
+{"name":"product-material-web","version":"0.1.0","private":true,"type":"module","scripts":{"test":"node --test tests/*.test.mjs","serve":"node scripts/serve.mjs"},"devDependencies":{"@xmldom/xmldom":"^0.9.12","jszip":"3.10.1"}}
