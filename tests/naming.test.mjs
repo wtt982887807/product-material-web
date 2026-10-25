@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {currentMonth,deliveryName} from '../src/naming.js';
+import {currentMonth,deliveryName,resolveProductionMonth,monthInputValue} from '../src/naming.js';
 
 test('month is captured using Beijing time at a month boundary',()=>{
  assert.equal(currentMonth(new Date('2026-09-30T16:01:00Z')),'202610');
@@ -24,3 +24,15 @@ test('full filename date is not silently transformed to a month',()=>{
  assert.equal(deliveryName('【一页通20260630】示例1号.docx',{targetName:'示例1号集合资产管理计划',templateProductName:'示例1号',kind:'word',month:'202610'}),'【一页通20260630 202610】示例1号.docx');
 });
 test('rejects invalid month',()=>assert.throws(()=>deliveryName('a.docx',{targetName:'示例1号',kind:'word',month:'202613'})));
+
+test('manual production month survives a later task start and names both date conventions',()=>{
+ const month=resolveProductionMonth({manualValue:'2026-08',now:new Date('2026-10-25T00:00:00Z')});
+ assert.equal(month,'202608');
+ assert.equal(deliveryName('【海报2609】示例1号.pptx',{targetName:'示例1号',kind:'poster',month}),'【海报2608】示例1号.pptx');
+ assert.equal(deliveryName('【一页通202609】示例1号.docx',{targetName:'示例1号',kind:'word',month}),'【一页通202608】示例1号.docx');
+ assert.equal(monthInputValue(month),'2026-08');
+});
+test('automatic production month refreshes at Beijing month boundary; empty and impossible manual values fail',()=>{
+ assert.equal(resolveProductionMonth({now:new Date('2026-10-31T16:00:00Z')}),'202611');
+ for(const value of ['', '2026-13','2026-00','2026-1','abcd','2026-10-25'])assert.throws(()=>resolveProductionMonth({manualValue:value}));
+});
