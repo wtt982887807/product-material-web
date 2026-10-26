@@ -21,6 +21,12 @@ test('calendar columns preserve lower/upper hurdles, payout ratios and independe
  const calendar=await readProductCalendar(await workbook([headers,['青澜定开债8号','00953794','建设银行','持营开放','2026/11/23','2026/11/27','前2个开放日参与退出，后3个仅参与',2.05,2.35,5,50,'每12个月',{v:0.0225,s:2}]]));
  assert.equal(calendar.rows.length,1);const r=calendar.rows[0];
  assert.equal(r.productCode,'00953794');assert.equal(r.openingDate,'2026/11/23');assert.equal(r.openingEnd,'2026/11/27');assert.equal(r.openingPeriod,'每12个月');assert.equal(r.performanceText,'R1=2.05%；R2=2.35%；R1＜R≤R2，计提5%；R＞R2，计提50%');assert.equal(r.benchmark,'2.25%');assert.equal(r.source.row,2);assert.equal(r.fields.performanceLower.cell,'H2');assert.equal(r.openingDateEvent,'opening');
+ // Contract opening rules are retained in the source row but never supplemented.
+ const supplement=calendarSupplementText(r);
+ assert.doesNotMatch(supplement,/开放期|每12个月/);
+ assert.match(supplement,/本次开放日：2026\/11\/23至2026\/11\/27/);
+ assert.match(supplement,/分段规则：前2个开放日参与退出，后3个仅参与/);
+ assert.equal(calendarSupplementText({openingPeriod:'每18个月'}),'');
 });
 
 test('calendar supplement passes both actual bounds and all segment rules to the review engine',async()=>{
