@@ -165,7 +165,8 @@ function renderGroup(group){
   const edits=el('details');edits.append(el('summary','','分别补充原文'),el('p','supplement-note','各处原话术分别保留。补充只更新所选原文，不覆盖其他段落。'));
   for(const [i,member]of group.members.entries()){
    if(!groupFacts(member).some(f=>f.status!=='verified'))continue;
-   const originals=state.task.materials.flatMap(m=>m.fields.filter(f=>f.factIds?.some(id=>member.factIds.includes(id))).map(f=>({name:m.template.name,text:f.before})));
+   const records=(state.task._records||[]).filter(r=>member.factIds.includes(r.f.id));
+   const originals=records.length?records.map(r=>({name:r.m.template.name,text:r.atom.before})):state.task.materials.flatMap(m=>m.fields.filter(f=>f.factIds?.some(id=>member.factIds.includes(id))).map(f=>({name:m.template.name,text:f.before})));
    edits.append(el('p','fact-reason','原文 '+(i+1)+' · '+[...new Set(originals.map(o=>o.name))].join('、')));
    for(const text of new Set(originals.map(o=>o.text)))edits.append(el('p','',text));
    edits.append(supplementForm(member,label+' · 原文 '+(i+1)));
