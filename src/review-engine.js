@@ -570,15 +570,15 @@ function deriveOpeningWindows(task,group,facts,raw,parsed){
  notes.push(`按沪深交易日及${explicit?'补充分段规则':'模板原分段规则'}计算：参与和退出 ${windows.participation_exit}；仅参与 ${windows.participation_only}。周末及交易所休市日已排除。`);
  return{windows,warnings,notes,basis};
 }
-function openingDependencyInvalidations(task,updates){
+function openingDependencyInvalidations(task,updates,invalidRuleGroups=[]){
  const supplied=new Map(updates.map(u=>[u.factId,u])),invalid=new Map(),year=Number(task.month.slice(0,4));
  for(const group of getSupplementGroups(task).filter(g=>g.kind==='date'&&g.scope.event==='opening')){
   const rs=task._records.filter(r=>group.factIds.includes(r.f.id)),overall=rs.filter(r=>!r.atom.dateWindow),touched=overall.filter(r=>supplied.has(r.f.id));if(!touched.length)continue;
   const changed=touched.some(r=>formatDateLike(supplied.get(r.f.id).value,r.atom.before,r.atom.dateRole,year)!==(r.userRenderValue??r.atom.before));
-  const incomplete=touched.some(r=>!parseDateInput(supplied.get(r.f.id).value,year).end);if(!changed&&!incomplete)continue;
+  const incomplete=touched.some(r=>!parseDateInput(supplied.get(r.f.id).value,year).end),ruleFailed=invalidRuleGroups.includes(group.id);if(!changed&&!incomplete&&!ruleFailed)continue;
   for(const r of rs){if(supplied.has(r.f.id)||!r.atom.dateWindow&&!(incomplete&&r.atom.dateRole==='end'))continue;
    if(r.f.status!=='verified'&&!r.f.userConfirmed&&r.userRenderValue==null)continue;
-   invalid.set(r.f.id,{f:r.f,reason:r.atom.dateWindow?'档期已变更，旧分段确认失效，已恢复模板原日期待核。':'本次未补充完整区间，旧结束日确认失效，已恢复模板原日期待核。'});
+   invalid.set(r.f.id,{f:r.f,reason:r.atom.dateWindow?(ruleFailed?'本次分段规则未通过核对，旧分段确认失效，已恢复模板原日期待核。':'档期已变更，旧分段确认失效，已恢复模板原日期待核。'):'本次未补充完整区间，旧结束日确认失效，已恢复模板原日期待核。'});
   }
  }
  return [...invalid.values()];
@@ -595,8 +595,9 @@ function previewDates(task,group,facts,raw){
   const result=previewUpdates(task,[f],{opening_announced_date:value},raw,group.id);for(const u of result.updates){u.label=label;if(window&&derived.basis)u.basis=derived.basis;}updates.push(...result.updates);warnings.push(...result.warnings);
  }
  if(!general&&!Object.values(windows).some(Boolean))throw new Error('请填写开放日期或日期区间。');
- warnings.push(...openingDependencyInvalidations(task,updates).map(i=>i.reason));
- return{groupId:group.id,text:raw,updates,warnings:unique(warnings),notes:unique(notes)};
+ const invalidRuleGroups=generalParsed?.end&&segmentRule(raw)&&derived.warnings.length?[group.id]:[];
+ warnings.push(...openingDependencyInvalidations(task,updates,invalidRuleGroups).map(i=>i.reason));
+ return{groupId:group.id,text:raw,updates,warnings:unique(warnings),notes:unique(notes),invalidRuleGroups};
 }
 export function previewSupplement(task,groupId,text){
  const group=getSupplementGroups(task).find(g=>g.id===groupId);if(!group)throw new Error('该补充事项已变化，请重新核对。');
@@ -631,7 +632,7 @@ export function previewSupplementText(task,text){
   previews.push(previewSupplement(task,matching[0].id,value));
  }
  if(!requests.length)throw new Error('请标明补充内容，例如本次开放日：2026/11/3；产品代码：000123；或填写业绩报酬分段。');
- return{text:raw,updates:previews.flatMap(p=>p.updates),warnings:[...warnings,...previews.flatMap(p=>p.warnings)],notes:unique(previews.flatMap(p=>p.notes||[]))};
+ return{text:raw,updates:previews.flatMap(p=>p.updates),warnings:[...warnings,...previews.flatMap(p=>p.warnings)],notes:unique(previews.flatMap(p=>p.notes||[])),invalidRuleGroups:unique(previews.flatMap(p=>p.invalidRuleGroups||[]))};
 }
 export function applySupplementBatch(task,previews){
  if(!Array.isArray(previews)||!previews.length)throw new Error('没有可应用的补充内容。');
@@ -645,7 +646,7 @@ export function applySupplementBatch(task,previews){
  }
  if(!prepared.size)throw new Error('没有可对应到模板的补充字段。');
  // Everything above is read-only: one invalid field cannot leave a partial update.
- const invalidated=openingDependencyInvalidations(task,[...prepared.values()].map(({f,value})=>({factId:f.id,value})));
+ const invalidated=openingDependencyInvalidations(task,[...prepared.values()].map(({f,value})=>({factId:f.id,value})),previews.flatMap(p=>p.invalidRuleGroups||[]));
  for(const {f,reason}of invalidated){delete f.userConfirmed;delete f._confirmationBefore;f.value=null;f.status='pending';f.source='template';f.reason=reason;f.reasonType='needs_review';f.evidence=[];for(const r of task._records.filter(r=>r.f===f))delete r.userRenderValue;}
  for(const item of prepared.values()){
   const {f,value,renders,text,source,basis}=item;delete f.userConfirmed;delete f._confirmationBefore;
