@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import JSZip from 'jszip';
 import * as naming from '../src/naming.js';
-import {setSupplement} from '../src/review-engine.js';
+import * as reviewEngine from '../src/review-engine.js';
 import * as companyDefaults from '../src/default-company-profile.js';
 
 const appSource = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
@@ -53,7 +53,7 @@ const record = value => ({...value, bytes: new Uint8Array([1])});
 // Execute the real app event handlers with small DOM/import boundary fakes.
 // No browser, storage, Office files or network is used; naming and supplements
 // retain their production implementations.
-function createApp({store, parseCompanyProfile, onAnalyze, onWrite, onDownload, readWordTemplate, readWordContract} = {}) {
+function createApp({store, parseCompanyProfile, onAnalyze, onWrite, onDownload, readWordTemplate, readWordContract, taskFactory, calendar} = {}) {
   const elements = new Map(ids.map(id => [id, new Element()]));
   const document = {
     getElementById(id) { assert.ok(elements.has(id), `Missing page element: ${id}`); return elements.get(id); },
@@ -77,8 +77,10 @@ function createApp({store, parseCompanyProfile, onAnalyze, onWrite, onDownload, 
       readWordTemplate: readWordTemplate || (async ({name}) => ({id: 'template', name:name.replace(/\.(doc|rtf)$/i,'.docx'), sha256: 'template', kind: 'docx', paragraphs: []})),
     },
     './review-engine.js': {
+      ...reviewEngine,
       analyzeMaterials(contract, templates, options) {
         onAnalyze?.(options);
+        if(taskFactory)return taskFactory(contract,templates,options);
         return {
           target: {name: '示例稳健1号集合资产管理计划', shortName: '示例稳健1号'},
           contract, templates, month: options.month, warnings: [], _records: [],
@@ -86,8 +88,8 @@ function createApp({store, parseCompanyProfile, onAnalyze, onWrite, onDownload, 
           materials: templates.map(template => ({template, kind: 'word', fields: [], operations: [], warnings: []})),
         };
       },
-      setSupplement,
     },
+    './calendar-import.js':calendar||{readProductCalendar:async()=>({name:'产品日历.xlsx',rows:[],warnings:[]}),matchCalendarRows:()=>[]},
     './office-writer.js': {
       async writeTask(task) {
         const result=await onWrite?.(task);
@@ -101,7 +103,7 @@ function createApp({store, parseCompanyProfile, onAnalyze, onWrite, onDownload, 
     URL: {createObjectURL: blob => {const url=`blob:test-${++urlNumber}`;blobs.set(url,blob);return url;}, revokeObjectURL() {}},
     requestAnimationFrame: callback => queueMicrotask(callback),
     window: {scrollTo() {}},
-    importModule: async path => { assert.ok(modules[path], `Unexpected app import: ${path}`); return modules[path]; },
+    importModule: async path => { const modulePath=path.split('?')[0]; assert.ok(modules[modulePath], `Unexpected app import: ${path}`); return modules[modulePath]; },
   });
   const source = appSource
     .replace(/^import[^\n]+\n/, '')
@@ -109,13 +111,57 @@ function createApp({store, parseCompanyProfile, onAnalyze, onWrite, onDownload, 
     .replace(/restoreCompany\(\);(?=\s*$)/, 'globalThis.appReady=restoreCompany();');
   vm.runInContext(source, context, {filename: 'src/app.js'});
   assert.ok(context.appReady, 'App startup still exposes its initial restore boundary');
-  return {elements, state: vm.runInContext('state', context), ready: context.appReady,blobs};
+  return {elements, state: vm.runInContext('state', context), ready: context.appReady,blobs,renderReview:()=>vm.runInContext('renderReview()',context)};
 }
 
 async function chooseMaterials(app) {
   await app.elements.get('contract-input').dispatch('change', {target: {files: [file('示例合同.docx')]}});
   await app.elements.get('templates-input').dispatch('change', {target: {files: [file('示例模板.docx', 2)]}});
 }
+
+function appendSupplementFacts(app){
+ const scope={product:app.state.task.target.name,period:'announcement',condition:'opening|date|2026/8/12'};
+ for(const [id,key,label,condition]of [['date-a','opening_announced_date','本次开放日','opening|start|8月12日'],['date-b','opening_announced_date','本次开放日','opening|date|2026/8/12-2026/8/14'],['date-c','opening_announced_date','本次开放日','opening|end|8月14日'],['code','product_code','产品代码']])app.state.task.facts.push({id,key,label,status:'pending',value:null,scope:condition?{...scope,condition}:{product:scope.product},evidence:[],occurrences:[]});
+ app.renderReview();
+}
+const buttonIn=(element,text)=>descendants(element).find(n=>n.tagName==='button'&&n.textContent===text);
+
+test('three current-date occurrences render one supplement card, and text preview applies only after confirmation',async()=>{
+ const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();appendSupplementFacts(app);
+ assert.equal(descendants(app.elements.get('facts-list')).filter(n=>n.tagName==='strong'&&n.textContent==='本次开放日').length,1);
+ app.elements.get('supplement-text').value='本次开放日：2026年11月3日至2026年11月5日；产品代码：000123';
+ await app.elements.get('supplement-parse').click();assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null);
+ assert.ok(buttonIn(app.elements.get('supplement-preview'),'确认并应用补充'));
+ await buttonIn(app.elements.get('supplement-preview'),'确认并应用补充').click();
+ assert.equal(app.state.task.facts.find(f=>f.id==='code').value,'000123');
+ assert.ok(app.state.task.facts.filter(f=>f.key==='opening_announced_date').every(f=>f.status==='verified'));
+});
+
+test('confirm-original and undo actions invalidate existing downloads and never invent a replacement value',async()=>{
+ const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();await app.elements.get('generate-button').click();
+ assert.ok(app.elements.get('download-list').children.length);
+ await buttonIn(app.elements.get('facts-list'),'确认无误').click();
+ assert.equal(app.state.task.facts[0].userConfirmed,true);assert.equal(app.state.task.facts[0].value,undefined);
+ assert.equal(app.elements.get('download-list').children.length,0);
+ await buttonIn(app.elements.get('facts-list'),'撤销确认').click();assert.equal(app.state.task.facts[0].status,'pending');assert.equal(app.state.task.facts[0].userConfirmed,undefined);
+});
+
+test('Excel matching row previews with provenance; another product is not silently selected',async()=>{
+ const row={id:'row-2',productName:'示例稳健1号',productCode:'000123',source:{file:'日历.xlsx',sheet:'Sheet1',row:2}};
+ const app=createApp({calendar:{readProductCalendar:async()=>({name:'日历.xlsx',rows:[row],warnings:[]}),matchCalendarRows:()=>[row]}});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();appendSupplementFacts(app);
+ await app.elements.get('calendar-input').dispatch('change',{target:{files:[file('日历.xlsx')]}});
+ assert.equal(app.elements.get('calendar-row').value,'row-2');assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null);
+ await buttonIn(app.elements.get('supplement-preview'),'确认并应用补充').click();
+ const code=app.state.task.facts.find(f=>f.id==='code');assert.equal(code.value,'000123');assert.equal(code.source,'user_calendar');assert.equal(code.evidence[0].source.row,2);
+ const other=createApp({calendar:{readProductCalendar:async()=>({name:'日历.xlsx',rows:[{...row,productName:'示例稳健9号'}],warnings:[]}),matchCalendarRows:()=>[]}});await other.ready;await chooseMaterials(other);await other.elements.get('analyze-button').click();appendSupplementFacts(other);
+ await other.elements.get('calendar-input').dispatch('change',{target:{files:[file('日历.xlsx')]}});assert.equal(other.elements.get('calendar-row').value,'');assert.equal(other.state.supplementPreview,null);assert.match(other.elements.get('calendar-status').textContent,/未找到合同产品/);
+});
+
+test('editing bulk text after preview cannot apply the stale parsed values',async()=>{
+ const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();appendSupplementFacts(app);
+ app.elements.get('supplement-text').value='产品代码：000123';await app.elements.get('supplement-parse').click();const oldButton=buttonIn(app.elements.get('supplement-preview'),'确认并应用补充');
+ app.elements.get('supplement-text').value='产品代码：000999';await app.elements.get('supplement-text').dispatch('input');await oldButton.click();assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null);
+});
 
 test('one unreadable template does not prevent reviewing and downloading the other template',async()=>{
  const app=createApp({readWordTemplate:async({name})=>{if(name.includes('损坏'))throw new Error('文件包损坏');return {id:name,name,sha256:name,kind:'docx',paragraphs:[]};}});
@@ -192,6 +238,7 @@ test('manual month survives analysis, user supplement, and export; later edits u
   assert.ok(supplement, 'Pending facts expose the actual supplement handler');
   supplement.children.find(element => element.tagName === 'input').value = 'R2';
   await supplement.onsubmit({preventDefault() {}});
+  await descendants(app.elements.get('supplement-preview')).find(element=>element.tagName==='button'&&element.textContent==='确认并应用补充').click();
   assert.equal(app.state.task.month, '203204');
   assert.equal(app.state.task.facts[0].value, 'R2');
   await app.elements.get('generate-button').click();
