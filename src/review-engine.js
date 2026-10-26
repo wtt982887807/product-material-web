@@ -1,5 +1,7 @@
 // Local evidence rules. No network calls and no product-specific answer tables.
-export {getSectionReview} from './contract-sections.js?v=20261026-sections';
+export {getSectionReview} from './contract-sections.js?v=20261026-contract-apply';
+import {resolveStrategySummary} from './contract-sections.js?v=20261026-contract-apply';
+import {previewSectionAdoption,adoptSection,refreshSectionOperations,releaseSection} from './section-adoption.js?v=20261026-contract-apply';
 import {NS,elements} from './office-xml.js';
 import {parseDateInput,formatDateLike,parsePerformanceInput,parseOpeningInput} from './supplement-parser.js?v=20261026-rows';
 import {monthlyWeekdayPatterns,parseMonthlyWeekdayInput,monthlyWeekdayChanges} from './monthly-weekday.js?v=20261026-monthly';
@@ -149,6 +151,80 @@ function performanceData(rs){
  for(const t of all)if(t.role==='ratio'&&number(t.value)>0&&number(t.value)<100)ratios.push({value:t.value,tier:payoutTier(t.b.text,t,boundaries),evidence:[quote(t.b.base||t.b,t.b.text)]});
  const byValue=arr=>[...new Map(arr.map(a=>[a.value,a])).values()].sort((a,b)=>number(a.value)-number(b.value));
  return{thresholds:byValue(thresholds),ratios:byValue(ratios),tierRatios:ratios,symbolic:relevant.some(b=>/R1|R2|R[’′']/.test(b.text)),evidence:relevant.filter(b=>/R1|R2|R[’′']/.test(b.text)).slice(-3).map(b=>quote(b.base||b,b.text))};
+}
+const PERFORMANCE_POLICY_CACHE=new WeakMap();
+const PERFORMANCE_CONDITIONAL=/暂不|目前|现阶段|首期|首次|首个|本期|当期|本次|该期|某期|特定|优惠|减免|免收|豁免|可不|如果|假设|例如|举例|若|当[^。；;]*时|不超过|不高于|低于|小于|[<≤＜≥>＞]|除非|另有约定|但|根据公告/;
+const OTHER_PERFORMANCE_SUBJECT=/底层(?:基金|产品|资产管理计划|信托)?|投资标的|标的产品|其他产品|产品举例|假设|例如|举例/;
+function performanceScope(label,text){
+ const scope=scopeFor(label,text),subject=label+' '+text;
+ if(/(?:投资顾问|顾问机构).{0,16}(?:业绩报酬|不收取|不提取|提取|收取)/.test(subject))scope.issuer='advisor';
+ if(/(?:销售机构|代销机构|销售银行).{0,16}(?:业绩报酬|不收取|不提取|提取|收取)/.test(subject))scope.issuer='distributor';
+ return scope;
+}
+function performanceDenial(text,heading=false){
+ const t=String(text||'').trim();
+ return /不(?:提取|收取|计提)(?:管理人)?(?:的)?业绩报酬|业绩报酬(?:为|是|[:：])?\s*(?:不提取|不收取|不计提|无)/.test(t)||heading&&/^(?:不提取|不收取|不计提|无)[。；;]?\s*$/.test(t);
+}
+function noPerformanceFee(text,heading=false){return !PERFORMANCE_CONDITIONAL.test(text)&&!OTHER_PERFORMANCE_SUBJECT.test(text)&&performanceDenial(text,heading);}
+function chargesPerformanceFee(text,heading=false){
+ const t=String(text||'');if(/如有|如适用|若有|可能涉及|可能产生/.test(t))return false;
+ if(!/业绩报酬/.test(t))return heading&&/[RＲ]|收益率/.test(t)&&/[＜≤<>＞≥]/.test(t)&&[...t.matchAll(PERCENT)].some(m=>number(m[0])>0);
+ // A payout only below/above a hurdle is still a charging policy. A noun such
+ // as 计提标准 or 计提日, or a statement of no charge below a hurdle, is not.
+ if([...(t.matchAll(/提取|收取|计提/g))].some(m=>!/(?:不|未|无须|无需|免于)$/.test(t.slice(Math.max(0,m.index-3),m.index))&&!/^(?:基准|标准|日|时点|比例|方式|金额|公式|起点|原则)/.test(t.slice(m.index+m[0].length))))return true;
+ return heading&&/[RＲ]|收益率/.test(t)&&/[＜≤<>＞≥]/.test(t)&&[...t.matchAll(PERCENT)].some(m=>number(m[0])>0);
+}
+function contractPerformancePolicy(rs,scope,target){
+ let cache=PERFORMANCE_POLICY_CACHE.get(rs);if(!cache){cache=new Map();PERFORMANCE_POLICY_CACHE.set(rs,cache);}const cacheKey=JSON.stringify(scope);if(cache.has(cacheKey))return cache.get(cacheKey);
+ const none=[],charged=[],ambiguous=[],conditional=[],blocks=rs.filter(b=>!b.joined);let inherited={share:'',channel:''},other=false,feeHeading=false,headingText='',headingIndex=-2;
+ for(const [index,b]of blocks.entries()){
+  const text=b.text.trim(),bare=text.replace(/^\s*(?:第[一二三四五六七八九十百\d]+[章节]|[（(]?[一二三四五六七八九十百\d]+[）).、])\s*/,''),short=bare.length<65&&!/[。；;%％]/.test(bare);
+  if(short&&/^(?:第[一二三四五六七八九十百\d]+[章节]|[一二三四五六七八九十百]+、)/.test(text)){inherited={share:'',channel:''};other=false;feeHeading=false;}
+  if(short&&OTHER_PERFORMANCE_SUBJECT.test(text))other=true;
+  if(short&&/^(?:本(?:集合|信托)?计划|本产品)/.test(bare))other=false;
+  if(short&&/^[A-Z]类(?:份额)?/.test(bare))inherited={share:performanceScope('',bare).share,channel:''};
+  if(short&&/^渠道[:：]/.test(bare))inherited={share:'',channel:performanceScope('',bare).channel};
+  if(other||OTHER_PERFORMANCE_SUBJECT.test(text))continue;
+  if(short&&/^(?:(?:管理人)?(?:提取|收取)?(?:业绩报酬|浮动业绩报酬)(?:计提)?|(?:管理人)?(?:提取|收取)?业绩报酬的?(?:原则|计提方法|计提方式|计提规则|计提日))[:：]?$/.test(bare)){feeHeading=true;headingText=text;headingIndex=index;continue;}
+  if(short&&!/业绩报酬|[RＲ][1-9]?|收益率|不提取|不收取|不计提/.test(bare)&&/(?:管理费|托管费|税费|税收|投资范围|风险揭示|申购|赎回)/.test(bare))feeHeading=false;
+  const clauses=text.match(/[^。；;\n]+[。；;]?/g)||[];
+  for(const raw of clauses){
+   const clause=raw.trim(),previous=blocks[index-1]?.text||'',bandContext=/[RＲ][1-9]?\s*[＜≤<>＞≥]|(?:年化)?收益率[^。；;\n]{0,15}(?:低于|高于|超过|不超过)/.test(previous);
+   // A condition split into the preceding paragraph still qualifies this
+   // denial. Only immediate local context is used; a new fee heading resets it.
+   const localCondition=previous.length<120&&/^(?:\s*[（(]?[一二三四五六七八九十\d]+[）).、])?\s*(?:首期|首次|首个|本期|当期|本次|该期|某期|特定期间|优惠|减免|豁免|当.{1,90}时|若.{1,90}|如果.{1,90})/.test(previous);
+   const denial=performanceDenial(clause,feeHeading&&headingIndex===index-1),conditionalDenial=denial&&(bandContext||localCondition||PERFORMANCE_CONDITIONAL.test(clause));
+   const isNone=denial&&!conditionalDenial,isCharged=!denial&&chargesPerformanceFee(clause,feeHeading);if(!isNone&&!isCharged&&!conditionalDenial)continue;
+   if(new RegExp(PRODUCT_END).test(clause)&&!clause.includes(target.name)&&!/(?:本|该)(?:集合|信托)?计划/.test(clause))continue;
+   const local=performanceScope('',clause),share=local.share||inherited.share,channel=local.channel||inherited.channel;
+   const evidence=quote(b.base||b,(conditionalDenial&&(bandContext||localCondition)?previous+'\n':feeHeading&&!/业绩报酬/.test(clause)?headingText+'\n':'')+text);
+   if(local.issuer!==scope.issuer)continue;
+   if(share&&share!==scope.share||channel&&channel!==scope.channel){if(!scope.share&&share||!scope.channel&&channel)ambiguous.push(evidence);continue;}
+   if(conditionalDenial){conditional.push(evidence);continue;}
+   const value=isNone?(/业绩报酬/.test(clause)?clause.replace(/^\s*[（(]?[一二三四五六七八九十\d]+[）).、]\s*/,'').replace(/[；;]$/,'。'):'本集合计划不提取业绩报酬。'):null;
+   (isNone?none:charged).push({value,evidence});
+  }
+ }
+ const evidence=unique([...none,...charged].map(x=>x.evidence).map(e=>JSON.stringify(e))).map(e=>JSON.parse(e));let result;
+ if(none.length&&charged.length)result={policyMode:'conflict',status:'conflict',value:null,evidence,reason:'合同同一口径同时出现收取和不收取业绩报酬的条款，请核对适用条件；原模板暂保留。'};
+ else if(ambiguous.length&&none.length||!none.length&&ambiguous.length)result={policyMode:'unresolved',status:'pending',value:null,evidence:[...evidence,...ambiguous],reason:'合同业绩报酬条款涉及不同份额或渠道，尚未确定本模板适用的收费状态。'};
+ else if(none.length)result={policyMode:'none',status:'verified',value:none[0].value,evidence,source:'contract',reason:'合同明确不提取业绩报酬，以该收费状态替换旧计提话术及参数。'};
+ else if(conditional.length&&!charged.length)result={policyMode:'unresolved',status:'pending',value:null,evidence:conditional,needsPolicyReview:true,reason:'合同中的不提取结论附带期间或收益条件，尚不能认定本产品始终不收取业绩报酬；保留原计提话术待核。'};
+ else result={policyMode:charged.length?'charged':'unresolved',status:'pending',value:null,evidence,reason:charged.length?'合同明确收取业绩报酬，与模板不收取的状态不同；现有依据尚不能安全生成完整收费话术，请核对。':'合同尚未找到本产品同口径的明确业绩报酬收费状态，模板原结论保留待核。'};
+ cache.set(cacheKey,result);return result;
+}
+function reviewPerformancePolicy(task,m,field,p,rs){
+ if(field.manualReviewReason||keyFor(field.label)!=='performance')return false;
+ const scope=performanceScope(field.label,field.before),policy=contractPerformancePolicy(rs,scope,task.target),templateNone=(field.before.match(/[^。；;\n]+[。；;]?/g)||[]).some(s=>noPerformanceFee(s,true));
+ if(policy.policyMode!=='none'&&policy.policyMode!=='conflict'&&!policy.needsPolicyReview&&!templateNone)return false;
+ const mixed=/管理费|托管费|销售服务费|认购费|申购费|赎回费/.test(p.text);
+ const spans=mixed?[...p.text.matchAll(/[^。；;\n]+[。；;]?/g)].filter(s=>/业绩报酬/.test(s[0])).map(s=>({start:s.index,before:s[0]})):[{start:0,before:p.text}];
+ for(const span of spans){
+  const prior=task._records.some(r=>r.m===m&&r.field===field&&r.f.key==='performance_policy'&&r.f.policyMode==='none'&&JSON.stringify(r.atom.scope)===JSON.stringify(scope));
+  const atom={key:'performance_policy',...span,value:span.before,scope,...(policy.policyMode==='none'?{renderValue:prior?'':policy.value}:{})};
+  addOccurrence(task,m,field,p,atom,policy);
+ }
+ return true;
 }
 function resolveAtom(key,label,rs,scope,target,extra={}){
  const allowed=filtered(rs,scope);
@@ -416,18 +492,20 @@ function addOccurrence(task,m,field,p,atom,resolution){
  if(atom.key==='opening_announced_date'){scope.period='announcement';scope.condition=[atom.dateEvent,atom.dateRole,norm(atom.before),atom.dateWindow||''].join('|');}
  if(atom.key.startsWith('investment_')||atom.key.startsWith('custom:')||['opening','lockup','duration'].includes(atom.key))scope.condition=norm(atom.before);
  const factKey=(atom.key==='risk_description'?'risk_rating':atom.key)+'|'+JSON.stringify(scope);
- const factLabel=atom.key.startsWith('performance_ratio_')?'业绩报酬提成比例（第'+atom.key.match(/\d+$/)[0]+'档）':/^performance_R\d/.test(atom.key)?'业绩报酬基准 R'+atom.key.match(/\d+$/)[0]:field.label;
+ const factLabel=atom.key==='performance_policy'?'业绩报酬':atom.key.startsWith('performance_ratio_')?'业绩报酬提成比例（第'+atom.key.match(/\d+$/)[0]+'档）':/^performance_R\d/.test(atom.key)?'业绩报酬基准 R'+atom.key.match(/\d+$/)[0]:field.label;
  let f=task._factMap.get(factKey);if(!f){f={id:'fact-'+(task.facts.length+1),key:atom.key,label:factLabel,value:resolution.value,status:resolution.status,evidence:resolution.evidence||[],scope,occurrences:[],reason:resolution.reason,reasonType:resolution.reasonType||(resolution.status==='verified'?'confirmed':'needs_review')};task.facts.push(f);task._factMap.set(factKey,f);}
  else if(atom.key==='opening_monthly_weekday'&&resolution.status!=='verified'&&f.status==='verified'){
   Object.assign(f,{value:null,status:resolution.status,reason:resolution.reason,reasonType:'needs_review'});
   for(const material of task.materials)material.operations=material.operations.filter(o=>!o.factIds?.includes(f.id));
   for(const record of task._records.filter(r=>r.f===f))renderRecord(record);
  }
+ if(atom.key==='performance_policy'){f.policyMode=resolution.policyMode;if(resolution.source)f.source=resolution.source;}
  f.occurrences.push({materialId:m.materialId,paragraphId:p.id,fieldId:field.id});field.factIds.push(f.id);
  const record={m,field,p,atom,f};task._records.push(record);renderRecord(record);
 }
 function operationId(m){m._operationSequence=(m._operationSequence||0)+1;return 'op-'+m._operationSequence;}
 function renderRecord({m,field,p,atom,f,userRenderValue}){
+ if(field.sectionOverrideId)return;
  const common={paragraphId:p.id,part:p.part,index:p.index,reason:f.reason,factIds:[f.id]};
  if(f.userConfirmed)return;
  if(atom.key==='opening_monthly_weekday'){
@@ -455,6 +533,7 @@ function renderRecord({m,field,p,atom,f,userRenderValue}){
  }
 }
 function reviewParagraph(task,m,field,p,rs){
+ if(reviewPerformancePolicy(task,m,field,p,rs))return;
  const atoms=field.manualReviewReason?[{key:'custom:table_layout:'+labelNorm(field.label),start:0,before:p.text,value:p.text,manualReviewReason:field.manualReviewReason}]:atomsFor(field.label,p.text,task.target,keyFor(field.label)==='performance'?m._performanceText:field.before);
  for(const atom of atoms){let resolution;const aggregate=(atom.key.endsWith('_fee')||atom.key.startsWith('performance_'))&&AGGREGATE_LAYERS.test(field.label+' '+field.before);
   if(aggregate)atom.scope={...(atom.scope||scopeFor(field.label,p.text,atom.start)),condition:'aggregate_layers'};
@@ -464,6 +543,7 @@ function reviewParagraph(task,m,field,p,rs){
    resolution=a.status==='verified'&&b.status==='verified'?{status:'verified',value:`预警线${a.value}，止损线${b.value}`,evidence:[...a.evidence,...b.evidence],reason:'合同明确设置预警线和止损线。'}:resolveAtom(atom.key,field.label,rs,{},task.target,{original:p.text});
   }else if(atom.key==='risk_description')resolution=resolveAtom('risk_rating',field.label,rs,atom.scope,task.target);
   else if(atom.key==='opening_announced_date')resolution=pendingAnnouncement();
+  else if(atom.key==='investment_strategy'&&m._strategySummaries?.get(JSON.stringify(scopeFor(field.label,field.before)))){resolution=m._strategySummaries.get(JSON.stringify(scopeFor(field.label,field.before)));if(resolution.status==='verified')resolution={...resolution,value:atom.before};}
   else resolution=resolveAtom(atom.key,field.label,rs,atom.scope||scopeFor(field.label,p.text,atom.start),task.target,{original:atom.before});
   if(atom.key==='opening_monthly_weekday'&&resolution.status==='verified'){const alignment=monthlyWeekdayChanges(atom.monthlyPattern,resolution.value);if(alignment.warning)resolution={...resolution,status:'pending',value:null,reasonType:'needs_review',reason:alignment.warning};}
   if(aggregate&&!(resolution.status==='verified'&&resolution.evidence?.length&&resolution.evidence.every(e=>AGGREGATE_LAYERS.test(e.quote))))resolution={...resolution,status:'pending',value:null,reasonType:'needs_review',reason:'模板列示跨层合计费用，尚未取得同口径的合同依据，保留原值待核。'};
@@ -481,6 +561,7 @@ function reviewParagraph(task,m,field,p,rs){
  }
 }
 function finalize(task){
+ refreshSectionOperations(task);
  for(const m of task.materials){
   m.operations=m.operations.filter((o,i,arr)=>!arr.slice(0,i).some(a=>a.paragraphId===o.paragraphId&&a.kind===o.kind&&a.start===o.start&&a.before===o.before&&a.after===o.after));
   for(const field of m.fields){field.factIds=unique(field.factIds);const fs=field.factIds.map(id=>task.facts.find(f=>f.id===id));field.status=fs.some(f=>f.status==='conflict')?'conflict':fs.some(f=>f.status==='pending')?'pending':'verified';const replaces=m.operations.filter(o=>field.paragraphIds.includes(o.paragraphId)&&o.kind==='replace');field.after=field.paragraphIds.map(id=>{let t=m.template.paragraphs.find(p=>p.id===id)?.text||'';for(const o of replaces.filter(o=>o.paragraphId===id).sort((a,b)=>b.start-a.start))t=t.slice(0,o.start)+o.after+t.slice(o.start+o.before.length);return t;}).join('\n');if(field.source!=='company')field.reason=field.status==='verified'?(replaces.length?'合同有明确依据，最小范围更新。':'原值与已取得依据一致。'):'保留模板原值，关键参数标黄并添加批注。';}
@@ -498,6 +579,8 @@ export function analyzeMaterials(contract,templates,{now,month}={}){
   const m={materialId:t.id,template:t,kind,templateProductName:headings?.name||selection.name,selectedPages:kind==='poster'?(t.slides||[]).map(s=>s.page):selection.pages,operations:[],fields:[],warnings:[...(t.warnings||[])]};Object.defineProperty(m,'_performanceText',{value:[...rows.filter(r=>keyFor(r.label)==='performance').map(r=>r.value),...freePerformance.map(p=>p.text)].join('\n')});task.materials.push(m);
   if(!rows.length&&!freePerformance.length)m.warnings.push('尚未识别到可可靠定位的产品要素区，需检查模板结构。');
   const map=new Map(t.paragraphs.map(p=>[p.id,p]));const selectedIds=new Set();
+  const strategyGroups=new Map();for(const row of rows.filter(r=>keyFor(r.label)==='investment_strategy')){const text=fieldParagraphs(row,map).map(p=>p.text).join('\n'),scope=scopeFor(row.label,text),key=JSON.stringify(scope);const group=strategyGroups.get(key)||{scope,texts:[]};group.texts.push(text);strategyGroups.set(key,group);}
+  Object.defineProperty(m,'_strategySummaries',{value:new Map([...strategyGroups].map(([key,g])=>[key,resolveStrategySummary(contract,unique(g.texts).join('\n'),g.scope)]))});
   for(const row of rows){
    const ps=fieldParagraphs(row,map);ps.forEach(p=>selectedIds.add(p.id));const field={id:`${t.id}-field-${m.fields.length+1}`,label:row.label,status:'pending',before:ps.map(p=>p.text).join('\n'),after:'',factIds:[],paragraphIds:ps.map(p=>p.id),reason:'',manualReviewReason:row.manualReviewReason};m.fields.push(field);
    for(const p of ps)if(p.text.trim())reviewParagraph(task,m,field,p,rs);
@@ -524,8 +607,9 @@ export function analyzeMaterials(contract,templates,{now,month}={}){
  return finalize(task);
 }
 function validateSupplement(fact,value,task){
+ if(fact.sectionOverrideId)throw new Error('此项已采用合同内容；请先撤销采用，再单独补充。');
  const raw=String(value??'').trim();if(!raw)throw new Error('请输入补充值。');let accepted=raw;
- if(fact.key.endsWith('_fee')||fact.key.startsWith('performance_')||fact.key==='benchmark'){if(!/^\d+(?:\.\d+)?\s*[%％]?$/.test(raw)||number(raw)>100)throw new Error('请填写0至100之间的费率数字，可带百分号。');accepted=raw.replace(/[％\s]/g,'').replace(/%$/,'')+'%';}
+ if(fact.key.endsWith('_fee')||fact.key.startsWith('performance_')&&fact.key!=='performance_policy'||fact.key==='benchmark'){if(!/^\d+(?:\.\d+)?\s*[%％]?$/.test(raw)||number(raw)>100)throw new Error('请填写0至100之间的费率数字，可带百分号。');accepted=raw.replace(/[％\s]/g,'').replace(/%$/,'')+'%';}
  else if(/^(?:minimum_amount|additional_amount|opening_cycle|opening_days|opening_monthday|lockup_days|duration_years)$/.test(fact.key)){const m=raw.match(/^(\d+(?:\.\d+)?)\s*(?:万元?|年|天|个月|个交易日|交易日|日)?$/);if(!m)throw new Error('请填写有效数字，可附相应单位。');if(!/amount/.test(fact.key)&&!Number.isInteger(Number(m[1])))throw new Error('日期、天数及周期请填写整数。');accepted=m[1];if(fact.key==='opening_monthday'&&(Number(accepted)<1||Number(accepted)>31))throw new Error('每月日期应为1至31日。');}
  else if(fact.key==='opening_weekday'){if(!/^(?:周|星期|每周)?[一二三四五六日天]$/.test(raw))throw new Error('请填写星期几，例如周四。');accepted=raw.at(-1);}
  else if(fact.key==='opening_monthly_weekday'){accepted=parseMonthlyWeekdayInput(raw);for(const r of task._records.filter(r=>r.f===fact)){const alignment=monthlyWeekdayChanges(r.atom.monthlyPattern,accepted);if(alignment.warning)throw new Error(alignment.warning);}}
@@ -538,7 +622,10 @@ function rebuildFacts(task,ids){
  const selected=new Set(ids);for(const m of task.materials)m.operations=m.operations.filter(o=>!o.factIds?.some(id=>selected.has(id)));
  for(const r of task._records)if(selected.has(r.f.id))renderRecord(r);return finalize(task);
 }
-const GROUP_KIND=f=>f.key==='opening_announced_date'?'date':f.key.startsWith('performance_')||f.key==='custom:performance_parameter'?'performance':f.key==='benchmark'?'benchmark':f.key==='product_code'?'code':/^opening(?:_|$)/.test(f.key)?'opening':'text';
+export const previewContractSection=previewSectionAdoption;
+export function applyContractSection(task,preview){adoptSection(task,preview);return finalize(task);}
+export function undoContractSection(task,id){const ids=releaseSection(task,id);return rebuildFacts(task,ids);}
+const GROUP_KIND=f=>f.key==='performance_policy'?'performance_policy':f.key==='opening_announced_date'?'date':f.key.startsWith('performance_')||f.key==='custom:performance_parameter'?'performance':f.key==='benchmark'?'benchmark':f.key==='product_code'?'code':/^opening(?:_|$)/.test(f.key)?'opening':'text';
 export function getSupplementGroups(task){
  const groups=new Map();
  for(const f of task.facts){

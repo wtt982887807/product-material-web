@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {getSectionReview} from '../src/contract-sections.js';
+import {getSectionReview,resolveStrategySummary} from '../src/contract-sections.js';
 import {analyzeMaterials} from '../src/review-engine.js';
 
 const ratioLines=[
@@ -19,6 +19,65 @@ function taskFor(lines,materialTexts=[ratioLines.join('\n')],key='investment_rat
  return {contract,facts,materials,target:{name:'测试产品'}};
 }
 const review=t=>getSectionReview(t,t.facts.map(f=>f.id));
+const strategyTitles=['资产配置策略','商品期货投资策略','基金策略','风险平价策略','套期保值策略','国债期货投资策略','境外结构化票据投资策略'];
+const strategyList=titles=>titles.map((t,i)=>`${i+1}、${t}`).join('；');
+function strategyLines(titles=strategyTitles){return ['三、投资策略','（一）决策依据','依据合同履行投资决策职责。','（二）投资决策程序','管理人按程序执行交易。','（三）投资管理的方法和标准',...titles.flatMap((title,i)=>[`${i+1}、${title}`,`${title}的具体投资方法及管理要求。`,...(title==='基金策略'?['（1）定量策略','按照数据配置基金。','（2）定性策略','结合市场研究开展投资。']:[])]),`${titles.length+1}、固定收益类资产超过计划资产总值80%的发生情形和条件，及相应投资策略、主要资产类别`,'（1）发生情形和条件：在市场变化时，固定收益资产配置可以突破80%。','（2）相应投资策略、主要资产类别：以债券投资策略为主。','四、投资限制','不得从事违法投资。'];}
+
+test('strategy title summary resolves at the matching hierarchy, not governance headings',()=>{
+ const text=strategyList(strategyTitles),task=taskFor(strategyLines(),[text],'investment_strategy');
+ const before=JSON.stringify(task),result=resolveStrategySummary(task.contract,text);
+ assert.equal(result.status,'verified');assert.equal(result.value,text);
+ assert.equal(result.evidence[0].itemCount,7);assert.equal(result.evidence[0].noteCount,1);
+ assert.ok(result.evidence[0].quote.includes('决策依据'));assert.ok(result.evidence[0].quote.includes('突破80%'));
+ const r=review(task);assert.equal(r.kind,'aligned');assert.equal(r.needsReview,false);assert.equal(r.materials[0].matched,7);
+ assert.deepEqual(r.materials[0].items.map(i=>i.title),strategyTitles);assert.equal(r.materials[0].extra.length,0);
+ assert.equal(r.notes.length,1);assert.match(r.notes[0].contractText,/突破80%/);
+ assert.equal(JSON.stringify(task),before);
+});
+
+test('strategy discovery adapts to a different count and leaves nested fund strategies nested',()=>{
+ const titles=['债券投资策略','基金策略','多资产轮动策略'];
+ const task=taskFor(strategyLines(titles),[strategyList(titles)],'investment_strategy');
+ const r=review(task);assert.equal(r.materials[0].total,3);assert.equal(r.needsReview,false);
+ assert.ok(!r.materials[0].items.some(i=>i.title==='定量策略'));assert.equal(resolveStrategySummary(task.contract,strategyList(titles)).status,'verified');
+});
+
+test('missing or extra real strategy headings stay pending and are never expanded into prose',()=>{
+ const titles=['商品期货投资策略','国债期货投资策略','资产配置策略'];
+ const task=taskFor(strategyLines(titles),[strategyList(titles)],'investment_strategy');
+ for(const list of [titles.slice(0,2),[...titles,'信用套利策略']]){
+  const result=resolveStrategySummary(task.contract,strategyList(list));assert.equal(result.status,'pending');assert.equal(result.value,null);
+ }
+ task.materials[0].fields[0].after=strategyList(titles.slice(0,2));
+ assert.equal(review(task).materials[0].items.find(i=>i.title==='资产配置策略').status,'missing');
+});
+
+test('commodity and treasury futures strategy titles cannot substitute for one another',()=>{
+ const task=taskFor(strategyLines(['商品期货投资策略','国债期货投资策略']),['商品期货投资策略；商品期货投资策略'],'investment_strategy');
+ assert.equal(resolveStrategySummary(task.contract,task.materials[0].fields[0].after).status,'pending');
+ const r=review(task);assert.equal(r.materials[0].matched,1);assert.equal(r.materials[0].items.find(i=>i.title==='国债期货投资策略').status,'missing');
+});
+
+test('title summaries allow numbering and separator changes while preserving exact input text',()=>{
+ const task=taskFor(strategyLines(['商品期货投资策略','国债期货投资策略']));
+ const text='（二）国债期货策略\n（一）商品期货投资策略';
+ const r=resolveStrategySummary(task.contract,text);assert.equal(r.status,'verified');assert.equal(r.value,text);
+});
+
+test('strategy resolution refuses full prose and unheaded fuzzy matches',()=>{
+ const task=taskFor(strategyLines(['资产配置策略','基金策略']));
+ assert.equal(resolveStrategySummary(task.contract,'本计划采用资产配置策略，按照风险收益情况动态调整投资比例。'),null);
+ assert.equal(resolveStrategySummary({blocks:[{id:'x',text:'可以采用资产配置策略；基金策略。'}]},'资产配置策略；基金策略'),null);
+});
+
+test('strategy source versions and unresolved share scope cannot be silently chosen',()=>{
+ const titles=['资产配置策略','基金策略'];
+ const task=taskFor([...strategyLines(titles),'附件',...strategyLines(['资产配置策略','信用套利策略'])]);
+ assert.equal(resolveStrategySummary(task.contract,strategyList(titles)).status,'conflict');
+ const scoped=taskFor(['A类份额投资策略','1、资产配置策略','说明。','2、基金策略','说明。','B类份额投资策略','1、资产配置策略','说明。','2、信用套利策略','说明。','投资限制']);
+ assert.notEqual(resolveStrategySummary(scoped.contract,strategyList(titles)).status,'verified');
+ assert.equal(resolveStrategySummary(scoped.contract,strategyList(titles),{share:'A'}).status,'verified');
+});
 
 test('complete numbered section includes all five ratios and tail note across pages',()=>{
  const task=taskFor(['3、投资比例',...ratioLines,note,'4、投资限制','不得投资禁止类资产。']);
@@ -27,6 +86,29 @@ test('complete numbered section includes all five ratios and tail note across pa
  assert.ok(r.evidence[0].quote.includes('境外投资'));assert.ok(r.evidence[0].quote.includes('穿透原则'));
  assert.ok(!r.evidence[0].quote.includes('不得投资'));assert.equal(r.materials[0].total,5);
  assert.equal(JSON.stringify(task),before,'review must never mutate the engine result');
+});
+
+test('ratio adoption source preserves every original content line including introductory conditions and tail notes',()=>{
+ const intro='本计划在正常市场条件下遵守下列投资比例：';
+ const task=taskFor(['3、投资比例',intro,...ratioLines,note,'4、投资限制'],[ratioLines.slice(0,3).join('\n')]);
+ const r=review(task);assert.deepEqual(r.replacement.lines,[intro,...ratioLines,note]);
+ assert.ok(!r.replacement.lines.includes('3、投资比例'));assert.equal(r.replacement.lines[1],ratioLines[0]);
+});
+
+test('ambiguous ratio versions or scope cannot expose an adoption replacement',()=>{
+ const task=taskFor(['A类份额投资比例',...ratioLines,'B类份额投资比例',...ratioLines.map(s=>s.replace('20%～100%','30%～100%')),'投资限制']);
+ assert.equal(review(task).replacement,undefined);
+ task.facts[0].scope.share='A';assert.deepEqual(review(task).replacement.lines,ratioLines);
+ task.facts[0].scope.condition='仅限特定市场条件';assert.equal(review(task).replacement,undefined);
+ const versions=taskFor(['投资比例',...ratioLines,'投资限制','附件','投资比例',...ratioLines.map(s=>s.replace('20%～100%','30%～100%')),'投资限制']);
+ assert.equal(review(versions).replacement,undefined);
+});
+
+test('complete duplicate ratio sections keep one safe source while non-ratio fields expose none',()=>{
+ const ratio=review(taskFor(['投资比例',...ratioLines,note,'投资限制','附件','投资比例',...ratioLines,note,'投资限制']));
+ assert.deepEqual(ratio.replacement.lines,[...ratioLines,note]);
+ const strategy=review(taskFor(strategyLines(['资产配置策略','基金策略']),['资产配置策略；基金策略'],'investment_strategy'));
+ assert.equal(strategy.replacement,undefined);
 });
 
 test('each material gets its own missing coverage, never union across three templates',()=>{
@@ -179,5 +261,6 @@ test('real analyzeMaterials result uses all associated field paragraphs without 
  const ids=task.facts.filter(f=>f.key==='investment_ratios').map(f=>f.id);
  const before=JSON.stringify({facts:task.facts,operations:task.materials[0].operations});
  const r=getSectionReview(task,ids);assert.equal(r.materials[0].matched,3);assert.equal(r.materials[0].total,5);
+ const one=getSectionReview(task,[ids[0]]);assert.deepEqual(one.materials[0].fieldIds,['m-field-2','m-field-3','m-field-4']);
  assert.equal(JSON.stringify({facts:task.facts,operations:task.materials[0].operations}),before);
 });
