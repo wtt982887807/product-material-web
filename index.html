@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="根据合同更新产品要素，保留模板原话术与格式。在浏览器本地读取并导出 Word 和 PowerPoint。">
-  <title>产品要素工作台</title><link rel="stylesheet" href="styles.css?v=20261026-rows">
+  <title>产品要素工作台</title><link rel="stylesheet" href="styles.css?v=20261026-numbers">
 </head>
 <body>
   <header class="topbar"><a class="brand" href="./" aria-label="产品要素工作台首页"><span class="brand-mark">P</span><span>产品要素工作台<small>PRODUCT MATERIALS</small></span></a><div class="top-meta"><span class="local-dot"></span>文件在本机处理<a href="https://github.com/wtt982887807/product-material-web" target="_blank" rel="noopener">使用说明 ↗</a></div></header>
@@ -30,9 +30,17 @@
       <section class="supplement-panel" aria-labelledby="supplement-heading">
         <div class="supplement-panel-head"><div><h3 id="supplement-heading">补充本次资料</h3><p>同一要素只填一次，同步到相关物料。先预览识别结果，再应用。</p></div><div class="supplement-tabs" role="group" aria-label="补充方式"><button id="supplement-text-tab" class="selected" type="button">文字输入</button><button id="supplement-excel-tab" type="button">上传 Excel</button></div></div>
         <div id="supplement-text-panel">
-          <p class="supplement-note">只填写需要修改的项，每行单独解析、确认后应用；空白或未解析的行不会更新。</p>
-          <div class="supplement-input-row"><label for="supplement-date">本次开放日</label><textarea id="supplement-date" rows="1" placeholder="例如：2027.10.14，或2026/9/8至2026/9/14"></textarea><button id="supplement-parse-date" class="secondary-button" type="button" aria-label="解析文字：本次开放日">解析文字</button></div>
-          <div class="supplement-input-row"><label for="supplement-performance">业绩报酬</label><textarea id="supplement-performance" rows="2" placeholder="例如：超过业绩报酬计提基准2.50%的部分提取60%作为管理人业绩报酬；也可填写分段计提原文"></textarea><button id="supplement-parse-performance" class="secondary-button" type="button" aria-label="解析文字：业绩报酬">解析文字</button></div>
+          <p class="supplement-note">只填写需要修改的项，每行单独预览、确认后应用；空白或未操作的行不会更新。</p>
+          <div class="supplement-input-row"><label for="supplement-date">本次开放日<br>（开售日）</label><textarea id="supplement-date" rows="1" placeholder="例如：2027.10.14，或2026/9/8至2026/9/14；开放日与开售日统一更新"></textarea><button id="supplement-parse-date" class="secondary-button" type="button" aria-label="解析文字：本次开放日">解析文字</button></div>
+          <div class="supplement-input-row performance-input-row"><span class="supplement-row-label">业绩报酬</span><div id="supplement-performance" class="performance-editor">
+            <div class="performance-mode-row"><label for="performance-mode">计提方式</label><select id="performance-mode"><option value="single">单档计提 · 填2个数字</option><option value="tiered">分段计提 · 填4个数字</option></select></div>
+            <div class="performance-number-grid">
+              <div><label id="performance-threshold1-label" for="performance-threshold1">计提基准（%）</label><input id="performance-threshold1" type="text" inputmode="decimal" placeholder="例如 2.50" autocomplete="off"></div>
+              <div id="performance-threshold2-wrap" hidden><label for="performance-threshold2">第二个基准（%）</label><input id="performance-threshold2" type="text" inputmode="decimal" placeholder="例如 3.00" autocomplete="off"></div>
+              <div><label id="performance-ratio1-label" for="performance-ratio1">提取比例（%）</label><input id="performance-ratio1" type="text" inputmode="decimal" placeholder="例如 60" autocomplete="off"></div>
+              <div id="performance-ratio2-wrap" hidden><label for="performance-ratio2">第二档提取比例（%）</label><input id="performance-ratio2" type="text" inputmode="decimal" placeholder="例如 40" autocomplete="off"></div>
+            </div><p id="performance-pattern" class="supplement-note">超过计提基准的收益部分，按提取比例计提。仅替换模板对应数字。</p>
+          </div><button id="supplement-parse-performance" class="secondary-button" type="button" aria-label="预览数字：业绩报酬">预览数字</button></div>
           <div class="supplement-input-row"><label for="supplement-benchmark">业绩比较基准</label><textarea id="supplement-benchmark" rows="1" placeholder="例如：2.25%"></textarea><button id="supplement-parse-benchmark" class="secondary-button" type="button" aria-label="解析文字：业绩比较基准">解析文字</button></div>
           <div class="supplement-input-row"><label for="supplement-code">产品代码</label><textarea id="supplement-code" rows="1" placeholder="例如：000123"></textarea><button id="supplement-parse-code" class="secondary-button" type="button" aria-label="解析文字：产品代码">解析文字</button></div>
           <div class="supplement-input-row"><label for="supplement-opening">开放期</label><textarea id="supplement-opening" rows="1" placeholder="例如：每满18个月，开放5个交易日；每月第一个、第三个周三"></textarea><button id="supplement-parse-opening" class="secondary-button" type="button" aria-label="解析文字：开放期">解析文字</button></div>
@@ -45,6 +53,6 @@
     <section class="how-it-works"><div><span>01</span><strong>同一事实，统一核对</strong><p>保留各模板自己的句式与位置。</p></div><div><span>02</span><strong>缺项保留，局部标黄</strong><p>不把旧值删成整段“待补充”。</p></div><div><span>03</span><strong>产品更新，月份自动</strong><p>制作月份只用于文件命名。</p></div></section>
   </main>
   <footer><span>产品要素工作台 · 本地文件处理</span><span>合同和模板在本机处理；网页自带公司介绍，可上传新版覆盖。</span></footer>
-  <script src="vendor/jszip.min.js"></script><script src="vendor/docToText.js"></script><script type="module" src="src/bootstrap.js?v=20261026-rows"></script>
+  <script src="vendor/jszip.min.js"></script><script src="vendor/docToText.js"></script><script type="module" src="src/bootstrap.js?v=20261026-numbers"></script>
 </body>
 </html>
