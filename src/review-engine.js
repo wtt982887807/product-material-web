@@ -1,6 +1,7 @@
 // Local evidence rules. No network calls and no product-specific answer tables.
 import {NS,elements} from './office-xml.js';
 import {parseDateInput,formatDateLike,parsePerformanceInput,parseOpeningInput} from './supplement-parser.js?v=20261026';
+import {getTradingDays} from './trading-calendar.js?v=20261026-openings';
 const PRODUCT_END='(?:集合资金信托计划|集合资产信托计划|集合资产管理计划|单一资产管理计划|资产管理计划|证券投资基金|信托计划)';
 const NAME_LABEL=/^(?:产品名称|产品全称|信托名称|信托计划名称|基金名称|计划名称|资产管理计划名称|产品简称)$/;
 const MARKETING=/历史业绩|产品表现|累计增长|最新净值|成立以来|年化收益|产品举例|同策略|代表产品|获奖|金牛奖/;
@@ -515,18 +516,88 @@ function previewUpdates(task,facts,values,text,groupId){
  }
  return{groupId,text,updates,warnings};
 }
+const dayString=d=>`${d.year}/${d.month}/${d.day}`;
+const sameDays=(a,b)=>a.length===b.length&&a.every((d,i)=>d===b[i]);
+function splitNumber(value){if(/^\d+$/.test(value))return Number(value);if(value.includes('十')){const [a,b]=value.split('十');return (a?cnum(a):1)*10+(b?cnum(b):0);}return cnum(value);}
+function segmentRule(text){
+ const marker=String(text).match(/(?:分段规则|开放分段|开放安排)\s*[:：]\s*([^\n]+)/),source=marker?.[1]||String(text),n='([一二两三四五六七八九十\\d]+)';
+ const both=source.match(new RegExp('(?:前|首)\\s*'+n+'\\s*个?\\s*(?:开放日|交易日)[^，,;；。\\n]{0,20}(?:参与|申购)(?:和|及|与|、)?(?:退出|赎回)'));
+ const only=source.match(new RegExp('后\\s*'+n+'\\s*个?\\s*(?:开放日|交易日)[^，,;；。\\n]{0,20}仅(?:开放|可|办理)?(?:参与|申购)'));
+ // Excel opening remarks share this label even when they only say to follow an announcement.
+ const explicit=!!both||!!only||/(?:前|首|后)\s*(?:[一二两三四五六七八九十百\d几若干]+\s*个?\s*)?(?:开放日|交易日)/.test(source);
+ if(!explicit)return null;
+ const first=both?splitNumber(both[1]):0,last=only?splitNumber(only[1]):0;
+ if(!Number.isInteger(first)||!Number.isInteger(last)||first<=0||last<=0)return{warning:'分段规则未同时明确前段参与和退出、后段仅参与的交易日天数，分段日期保留待核。'};
+ return{first,last,rule:`前${first}个开放日参与和退出，后${last}个开放日仅参与`};
+}
+function oldWindowInterval(records,window,year){
+ const rs=records.filter(r=>(r.atom.dateWindow||'')===window),starts=unique(rs.filter(r=>r.atom.dateRole==='start').map(r=>r.atom.before)),ends=unique(rs.filter(r=>r.atom.dateRole==='end').map(r=>r.atom.before));
+ if(starts.length!==1||ends.length!==1)return null;
+ try{const start=parseDateInput(starts[0],year).start,range=parseDateInput(dayString(start)+'至'+ends[0],start.year);return range.end?range:null;}catch{return null;}
+}
+function inferSegmentRule(records,year){
+ const fields=new Map();for(const r of records){const key=r.m.materialId+'|'+r.field.id;if(!fields.has(key))fields.set(key,[]);fields.get(key).push(r);}
+ const counts=[],sources=[];
+ for(const rs of fields.values()){
+  if(!rs.some(r=>r.atom.dateWindow))continue;
+  const text=rs[0].field.before||'',rule=segmentRule(text);
+  if(rule){if(rule.warning)return rule;counts.push({...rule,ruleSource:'template_rule'});continue;}
+  const inferredYear=Number(text.match(/(?:^|\D)(20\d{2})[年/.-]/)?.[1]||year),first=oldWindowInterval(rs,'participation_exit',inferredYear),last=oldWindowInterval(rs,'participation_only',inferredYear);
+  if(!first||!last)return{warning:'模板的分段日期不完整，无法确定各段交易日天数；请补充完整分段规则。'};
+  let a,b,span;try{a=getTradingDays(first.start,first.end);b=getTradingDays(last.start,last.end);span=getTradingDays(first.start,last.end);}catch{return{warning:'模板原分段日期先后顺序有误，无法可靠推算，分段日期保留待核。'};}
+  if(a.warning||b.warning||span.warning)return{warning:a.warning||b.warning||span.warning};
+  if(!a.dates.length||!b.dates.length||!sameDays([...a.dates,...b.dates],span.dates))return{warning:'模板原分段日期存在空档或重叠，无法可靠确定交易日划分，分段日期保留待核。'};
+  if(a.dates[0]!==dayString(first.start)||a.dates.at(-1)!==dayString(first.end)||b.dates[0]!==dayString(last.start)||b.dates.at(-1)!==dayString(last.end))return{warning:'模板原分段边界不是沪深交易日，无法据此推算，分段日期保留待核。'};
+  const overall=oldWindowInterval(rs,'',inferredYear);if(overall){const all=getTradingDays(overall.start,overall.end);if(all.warning)return{warning:all.warning};if(!sameDays(all.dates,span.dates))return{warning:'模板原分段未完整覆盖开放区间，分段日期保留待核。'};}
+  counts.push({first:a.dates.length,last:b.dates.length,ruleSource:'template_dates',rule:`前${a.dates.length}个开放日参与和退出，后${b.dates.length}个开放日仅参与`});sources.push(...a.sources,...b.sources,...span.sources);
+ }
+ if(!counts.length)return{warning:'未找到可确认的完整分段规则，分段日期保留待核。'};
+ if(new Set(counts.map(c=>c.first+'|'+c.last)).size>1)return{warning:'不同模板的开放分段天数不一致，请明确本次分段规则；分段日期保留待核。'};
+ return{...counts[0],sources};
+}
+function deriveOpeningWindows(task,group,facts,raw,parsed){
+ const records=task._records.filter(r=>facts.includes(r.f)),warnings=[],notes=[];
+ if(group.scope.event!=='opening'||!parsed?.end||!records.some(r=>r.atom.dateWindow))return{windows:{},warnings,notes};
+ const context=records.map(r=>r.field.before||r.p.text).join('\n');
+ if(/(?:香港|港股|境外|海外).{0,35}(?:交易日|工作日)|(?:交易日|工作日).{0,35}(?:香港|港股|境外|海外)/.test(context+'\n'+raw))return{windows:{},warnings:['此处开放安排涉及香港或境外交易日，不能仅按沪深日历推算，分段日期保留待核。'],notes};
+ const trading=getTradingDays(parsed.start,parsed.end);if(trading.warning)return{windows:{},warnings:[trading.warning],notes};
+ if(!trading.dates.length||trading.dates[0]!==dayString(parsed.start)||trading.dates.at(-1)!==dayString(parsed.end))return{windows:{},warnings:['补充区间的起止日期并非均为沪深交易日，未静默平移；分段日期保留待核，请核对档期。'],notes};
+ const explicit=segmentRule(raw),rule=explicit?{...explicit,ruleSource:'explicit_rule'}:inferSegmentRule(records,parsed.start.year);
+ if(rule.warning)return{windows:{},warnings:[rule.warning],notes};
+ if(rule.first+rule.last!==trading.dates.length)return{windows:{},warnings:[`本次区间有${trading.dates.length}个沪深交易日，与分段规则的${rule.first}+${rule.last}天不一致，分段日期保留待核。`],notes};
+ const windows={participation_exit:trading.dates[0]+'至'+trading.dates[rule.first-1],participation_only:trading.dates[rule.first]+'至'+trading.dates.at(-1)};
+ const sources=[...new Map([...(rule.sources||[]),...trading.sources].map(s=>[s.year,s])).values()],basis={kind:'trading_day_split',ruleSource:rule.ruleSource,rule:rule.rule,range:parsed.value,calendarSources:sources};
+ notes.push(`按沪深交易日及${explicit?'补充分段规则':'模板原分段规则'}计算：参与和退出 ${windows.participation_exit}；仅参与 ${windows.participation_only}。周末及交易所休市日已排除。`);
+ return{windows,warnings,notes,basis};
+}
+function openingDependencyInvalidations(task,updates,invalidRuleGroups=[]){
+ const supplied=new Map(updates.map(u=>[u.factId,u])),invalid=new Map(),year=Number(task.month.slice(0,4));
+ for(const group of getSupplementGroups(task).filter(g=>g.kind==='date'&&g.scope.event==='opening')){
+  const rs=task._records.filter(r=>group.factIds.includes(r.f.id)),overall=rs.filter(r=>!r.atom.dateWindow),touched=overall.filter(r=>supplied.has(r.f.id));if(!touched.length)continue;
+  const changed=touched.some(r=>formatDateLike(supplied.get(r.f.id).value,r.atom.before,r.atom.dateRole,year)!==(r.userRenderValue??r.atom.before));
+  const incomplete=touched.some(r=>!parseDateInput(supplied.get(r.f.id).value,year).end),ruleFailed=invalidRuleGroups.includes(group.id);if(!changed&&!incomplete&&!ruleFailed)continue;
+  for(const r of rs){if(supplied.has(r.f.id)||!r.atom.dateWindow&&!(incomplete&&r.atom.dateRole==='end'))continue;
+   if(r.f.status!=='verified'&&!r.f.userConfirmed&&r.userRenderValue==null)continue;
+   invalid.set(r.f.id,{f:r.f,reason:r.atom.dateWindow?(ruleFailed?'本次分段规则未通过核对，旧分段确认失效，已恢复模板原日期待核。':'档期已变更，旧分段确认失效，已恢复模板原日期待核。'):'本次未补充完整区间，旧结束日确认失效，已恢复模板原日期待核。'});
+  }
+ }
+ return [...invalid.values()];
+}
 function previewDates(task,group,facts,raw){
  const windows={participation_exit:raw.match(/(?:参与和退出|参与退出|申购和赎回)\s*[:：]\s*([^;；\n]+)/)?.[1],participation_only:raw.match(/(?:仅参与|仅开放参与|仅申购)\s*[:：]\s*([^;；\n]+)/)?.[1]};
- const general=raw.match(/(?:本次开放日|开放日期|本次开售日|本次募集期|本次预约日)\s*[:：]\s*([^;；\n]+)/)?.[1]||(!Object.values(windows).some(Boolean)?raw:'');
- const updates=[],warnings=[];let generalParsed;if(general)generalParsed=parseDateInput(general,Number(task.month.slice(0,4)));
+ const general=raw.match(/(?:本次开放日|开放日期|本次开售日|本次募集期|本次预约日)\s*[:：]\s*([^;；\n]+)/)?.[1]||(!Object.values(windows).some(Boolean)?raw.split(/[;；\n]/)[0]:'');
+ const updates=[],warnings=[],notes=[];let generalParsed;if(general)generalParsed=parseDateInput(general,Number(task.month.slice(0,4)));
+ const derived=Object.values(windows).some(Boolean)?{windows:{},warnings:[],notes:[]}:deriveOpeningWindows(task,group,facts,raw,generalParsed);Object.assign(windows,derived.windows);warnings.push(...derived.warnings);notes.push(...derived.notes);
  for(const f of facts){const rs=task._records.filter(r=>r.f===f),window=rs.find(r=>r.atom.dateWindow)?.atom.dateWindow||'',label=window==='participation_exit'?'参与和退出日期':window==='participation_only'?'仅参与日期':f.label,value=window?windows[window]:general;
   if(!value){if(window)warnings.push(label+'尚未补充，保留原日期待核；可填写“'+(window==='participation_exit'?'参与和退出':'仅参与')+'：起止日期”。');continue;}
   const parsed=parseDateInput(value,Number(task.month.slice(0,4)));
   if(!parsed.end&&rs.every(r=>r.atom.dateRole==='end')&&(group.scope.event==='opening'||rs.some(r=>r.atom.rangeEndpoint))){warnings.push(label+'的结束日期尚未补充，保留原结束日期并标黄。');continue;}
-  const result=previewUpdates(task,[f],{opening_announced_date:value},raw,group.id);for(const u of result.updates)u.label=label;updates.push(...result.updates);warnings.push(...result.warnings);
+  const result=previewUpdates(task,[f],{opening_announced_date:value},raw,group.id);for(const u of result.updates){u.label=label;if(window&&derived.basis)u.basis=derived.basis;}updates.push(...result.updates);warnings.push(...result.warnings);
  }
  if(!general&&!Object.values(windows).some(Boolean))throw new Error('请填写开放日期或日期区间。');
- return{groupId:group.id,text:raw,updates,warnings:unique(warnings)};
+ const invalidRuleGroups=generalParsed?.end&&segmentRule(raw)&&derived.warnings.length?[group.id]:[];
+ warnings.push(...openingDependencyInvalidations(task,updates,invalidRuleGroups).map(i=>i.reason));
+ return{groupId:group.id,text:raw,updates,warnings:unique(warnings),notes:unique(notes),invalidRuleGroups};
 }
 export function previewSupplement(task,groupId,text){
  const group=getSupplementGroups(task).find(g=>g.id===groupId);if(!group)throw new Error('该补充事项已变化，请重新核对。');
@@ -546,8 +617,8 @@ export function previewSupplementText(task,text){
  const raw=String(text).trim(),groups=getSupplementGroups(task),requests=[],warnings=[];
  if(/[-−－]\s*\d+(?:\.\d+)?\s*[%％]/.test(raw))throw new Error('当前补充百分比应为0至100，不能填写负数。');
  const extract=label=>raw.match(new RegExp('(?:^|[;；\\n])\\s*(?:'+label+')\\s*[:：]\\s*([^;；\\n]+)'))?.[1]?.trim();
- const date=extract('本次开放日|本次开放日期|开放日期|开放日'),windowBoth=extract('参与和退出|参与退出|申购和赎回'),windowOnly=extract('仅参与|仅开放参与|仅申购');
- if(date||windowBoth||windowOnly)requests.push(['date',[date?'本次开放日：'+date:'',windowBoth?'参与和退出：'+windowBoth:'',windowOnly?'仅参与：'+windowOnly:''].filter(Boolean).join('；'),'opening']);
+ const date=extract('本次开放日|本次开放日期|开放日期|开放日'),windowBoth=extract('参与和退出|参与退出|申购和赎回'),windowOnly=extract('仅参与|仅开放参与|仅申购'),splitRule=raw.match(/(?:^|[;；\n])\s*(?:分段规则|开放分段|开放安排)\s*[:：]\s*([^\n]+)/)?.[1]?.trim();
+ if(date||windowBoth||windowOnly)requests.push(['date',[date?'本次开放日：'+date:'',windowBoth?'参与和退出：'+windowBoth:'',windowOnly?'仅参与：'+windowOnly:'',splitRule?'分段规则：'+splitRule:''].filter(Boolean).join('；'),'opening']);
  const sale=extract('本次开售日|开售日|募集日期|本次募集期|募集期');if(sale)requests.push(['date',sale,'sale']);
  const reservation=extract('本次预约日|预约日期');if(reservation)requests.push(['date',reservation,'reservation']);
  const opening=extract('开放期|开放规则|开放周期');if(opening)requests.push(['opening',opening]);
@@ -561,7 +632,7 @@ export function previewSupplementText(task,text){
   previews.push(previewSupplement(task,matching[0].id,value));
  }
  if(!requests.length)throw new Error('请标明补充内容，例如本次开放日：2026/11/3；产品代码：000123；或填写业绩报酬分段。');
- return{text:raw,updates:previews.flatMap(p=>p.updates),warnings:[...warnings,...previews.flatMap(p=>p.warnings)]};
+ return{text:raw,updates:previews.flatMap(p=>p.updates),warnings:[...warnings,...previews.flatMap(p=>p.warnings)],notes:unique(previews.flatMap(p=>p.notes||[])),invalidRuleGroups:unique(previews.flatMap(p=>p.invalidRuleGroups||[]))};
 }
 export function applySupplementBatch(task,previews){
  if(!Array.isArray(previews)||!previews.length)throw new Error('没有可应用的补充内容。');
@@ -571,16 +642,20 @@ export function applySupplementBatch(task,previews){
   const value=validateSupplement(f,update.value,task),renders=[];
   if(prepared.has(f.id)&&prepared.get(f.id).value!==value)throw new Error('同一事项有不同补充值，请核对后再应用。');
   if(f.key==='opening_announced_date')for(const r of task._records.filter(r=>r.f===f))renders.push([r,formatDateLike(value,r.atom.before,r.atom.dateRole,Number(task.month.slice(0,4)))]);
-  prepared.set(f.id,{f,value,renders,text:preview.text||String(update.value),source:preview.source});
+  prepared.set(f.id,{f,value,renders,text:preview.text||String(update.value),source:preview.source,basis:update.basis});
  }
  if(!prepared.size)throw new Error('没有可对应到模板的补充字段。');
  // Everything above is read-only: one invalid field cannot leave a partial update.
+ const invalidated=openingDependencyInvalidations(task,[...prepared.values()].map(({f,value})=>({factId:f.id,value})),previews.flatMap(p=>p.invalidRuleGroups||[]));
+ for(const {f,reason}of invalidated){delete f.userConfirmed;delete f._confirmationBefore;f.value=null;f.status='pending';f.source='template';f.reason=reason;f.reasonType='needs_review';f.evidence=[];for(const r of task._records.filter(r=>r.f===f))delete r.userRenderValue;}
  for(const item of prepared.values()){
-  const {f,value,renders,text,source}=item;delete f.userConfirmed;delete f._confirmationBefore;
+  const {f,value,renders,text,source,basis}=item;delete f.userConfirmed;delete f._confirmationBefore;
   f.value=value;f.status='verified';f.source=source?'user_calendar':'user';f.reason=source?'由用户导入的产品日历补充确认。':'由用户补充确认；不是合同自动提取的依据。';f.reasonType='user_confirmed';
-  f.evidence=[{blockId:source?'user-calendar':'user-supplement',quote:text,...(source?{source:{...source}}:{})}];for(const [r,after]of renders)r.userRenderValue=after;
+  const derivation=basis?.kind==='trading_day_split'?`\n按沪深交易日及${basis.ruleSource==='explicit_rule'?'补充':'模板'}分段规则计算：${basis.rule}；本段 ${value}。\n交易日历依据：${basis.calendarSources.map(s=>s.title+' '+s.url).join('；')}`:'';
+  if(derivation)f.reason+='分段日期按沪深交易日和分段规则计算。';
+  f.evidence=[{blockId:source?'user-calendar':'user-supplement',quote:text+derivation,...(source?{source:{...source}}:{}),...(basis?{basis}:{})}];for(const [r,after]of renders)r.userRenderValue=after;
  }
- return rebuildFacts(task,[...prepared.keys()]);
+ return rebuildFacts(task,[...prepared.keys(),...invalidated.map(i=>i.f.id)]);
 }
 export function applySupplement(task,preview){return applySupplementBatch(task,[preview]);}
 export function setSupplement(task,factId,value){const f=task.facts.find(f=>f.id===factId);if(!f)throw new Error('找不到待核事项。');return applySupplement(task,{text:String(value),updates:[{factId,key:f.key,value}]});}

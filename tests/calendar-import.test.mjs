@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import JSZip from 'jszip';
 import {DOMParser} from '@xmldom/xmldom';
-import {readProductCalendar,matchCalendarRows} from '../src/calendar-import.js';
+import {readProductCalendar,matchCalendarRows,calendarSupplementText,calendarOpeningRange} from '../src/calendar-import.js';
 Object.assign(globalThis,{JSZip,DOMParser});
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 function col(n){let s='';for(n++;n;n=Math.floor((n-1)/26))s=String.fromCharCode(65+(n-1)%26)+s;return s;}
@@ -23,9 +23,31 @@ test('calendar columns preserve lower/upper hurdles, payout ratios and independe
  assert.equal(r.productCode,'00953794');assert.equal(r.openingDate,'2026/11/23');assert.equal(r.openingEnd,'2026/11/27');assert.equal(r.openingPeriod,'每12个月');assert.equal(r.performanceText,'R1=2.05%；R2=2.35%；R1＜R≤R2，计提5%；R＞R2，计提50%');assert.equal(r.benchmark,'2.25%');assert.equal(r.source.row,2);assert.equal(r.fields.performanceLower.cell,'H2');assert.equal(r.openingDateEvent,'opening');
 });
 
+test('calendar supplement passes both actual bounds and all segment rules to the review engine',async()=>{
+ const c=await readProductCalendar(await workbook([headers,['青澜定开债8号','00953794','建设银行','持营开放','2026/9/8','2026/9/14','前2个开放日开放参与和退出；后3个开放日仅开放参与']]));
+ const text=calendarSupplementText(c.rows[0]);assert.match(text,/本次开放日：2026\/9\/8至2026\/9\/14/);assert.match(text,/分段规则：前2个开放日开放参与和退出，后3个开放日仅开放参与/);
+ assert.equal(calendarSupplementText({openingDate:'2026/9/8'}),'本次开放日：2026/9/8');
+ assert.equal(calendarSupplementText({openingEnd:'2026/9/14',openingDateNote:'家族端预约截止日'}),'');
+});
+
 test('appointment end is never silently imported as an opening date',async()=>{
  const calendar=await readProductCalendar(await workbook([headers,['青澜信用优享18个月1号','953957','建设银行','持营开放',null,'2026/11/17','家族端预约截止日',2.45,2.8,5,40,'每18个月']]));
  const r=calendar.rows[0];assert.equal(r.openingDate,'');assert.equal(r.openingEnd,'2026/11/17');assert.equal(r.openingDateEvent,'opening');assert.equal(r.benchmark,'');assert.match(calendar.warnings.join(' '),/未自动用作开放日期/);
+});
+
+test('a reservation deadline stays independent even when the row has an opening start',async()=>{
+ const calendar=await readProductCalendar(await workbook([headers,['青澜信用优享18个月1号','953957','建设银行','持营开放','2026/9/8','2026/9/14','家族端预约截止日']]));
+ const row=calendar.rows[0],range=calendarOpeningRange(row);
+ assert.equal(range.start,'2026/9/8');assert.equal(range.end,'');assert.equal(range.value,'2026/9/8');assert.match(range.warning,/预约截止|预约.*结束/);
+ assert.match(calendarSupplementText(row),/本次开放日：2026\/9\/8(?:\n|$)/);assert.doesNotMatch(calendarSupplementText(row),/本次开放日：[^\n]*2026\/9\/14/);
+ assert.equal(row.openingEnd,'2026/9/14');assert.equal(row.fields.endNote.value,'家族端预约截止日');
+});
+
+test('a general opening note mentioning reservations does not hide the real opening end',async()=>{
+ const columns=[...headers,'开放日备注'],calendar=await readProductCalendar(await workbook([columns,['青澜定开债8号','953794','建设银行','持营开放','2026/9/8','2026/9/14','前2个开放日开放参与和退出，后3个开放日仅开放参与',null,null,null,null,null,null,'家族端预约截止日另行公告']]));
+ const row=calendar.rows[0],range=calendarOpeningRange(row);
+ assert.deepEqual(range,{start:'2026/9/8',end:'2026/9/14',value:'2026/9/8至2026/9/14',warning:''});
+ assert.match(calendarSupplementText(row),/本次开放日：2026\/9\/8至2026\/9\/14/);
 });
 
 test('schedule start is the opening day even when the marketing stage is fundraising',async()=>{

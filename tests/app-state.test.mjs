@@ -6,6 +6,7 @@ import JSZip from 'jszip';
 import * as naming from '../src/naming.js';
 import * as reviewEngine from '../src/review-engine.js';
 import * as companyDefaults from '../src/default-company-profile.js';
+import {calendarSupplementText,calendarOpeningRange} from '../src/calendar-import.js';
 
 const appSource = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
 const page = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
@@ -91,7 +92,7 @@ function createApp({store, parseCompanyProfile, onAnalyze, onWrite, onDownload, 
         };
       },
     },
-    './calendar-import.js':calendar||{readProductCalendar:async()=>({name:'产品日历.xlsx',rows:[],warnings:[]}),matchCalendarRows:()=>[]},
+    './calendar-import.js':{calendarSupplementText,calendarOpeningRange,...(calendar||{readProductCalendar:async()=>({name:'产品日历.xlsx',rows:[],warnings:[]}),matchCalendarRows:()=>[]})},
     './office-writer.js': {
       async writeTask(task) {
         const result=await onWrite?.(task);
@@ -157,6 +158,18 @@ test('Excel matching row previews with provenance; another product is not silent
  const code=app.state.task.facts.find(f=>f.id==='code');assert.equal(code.value,'000123');assert.equal(code.source,'user_calendar');assert.equal(code.evidence[0].source.row,2);
  const other=createApp({calendar:{readProductCalendar:async()=>({name:'日历.xlsx',rows:[{...row,productName:'示例稳健9号'}],warnings:[]}),matchCalendarRows:()=>[]}});await other.ready;await chooseMaterials(other);await other.elements.get('analyze-button').click();appendSupplementFacts(other);
  await other.elements.get('calendar-input').dispatch('change',{target:{files:[file('日历.xlsx')]}});assert.equal(other.elements.get('calendar-row').value,'');assert.equal(other.state.supplementPreview,null);assert.match(other.elements.get('calendar-status').textContent,/未找到合同产品/);
+});
+
+test('Excel preview includes both schedule bounds and the complete window rule before applying',async()=>{
+ const row={id:'row-2',productName:'示例稳健1号',openingDate:'2026/9/8',openingStart:'2026/9/8',openingEnd:'2026/9/14',openingDateNote:'前2个开放日开放参与和退出；后3个开放日仅开放参与',source:{file:'日历.xlsx',sheet:'Sheet1',row:2}};
+ const app=await appForCalendar({readProductCalendar:async()=>({name:'日历.xlsx',rows:[row],warnings:[]}),matchCalendarRows:()=>[row]});
+ await app.elements.get('calendar-input').dispatch('change',{target:{files:[file('日历.xlsx')]}});
+ assert.match(app.state.supplementPreview.text,/本次开放日：2026\/9\/8至2026\/9\/14/);
+ assert.match(app.state.supplementPreview.text,/分段规则：前2.*后3/);
+ assert.ok(!descendants(app.elements.get('calendar-row-detail')).some(n=>n.textContent.includes('不作为本次开放日填入')));
+ await buttonIn(app.elements.get('supplement-preview'),'确认并应用补充').click();
+ assert.equal(app.state.task.facts.find(f=>f.id==='date-c').status,'verified');
+ assert.equal(app.state.task.facts.find(f=>f.id==='date-c').value,'2026/9/8至2026/9/14');
 });
 
 test('editing bulk text after preview cannot apply the stale parsed values',async()=>{
