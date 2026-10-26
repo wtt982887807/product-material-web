@@ -59,6 +59,7 @@ test('invalid dates and formula errors remain absent while valid fields still im
 
 test('unsupported input produces an actionable error without executing content',async()=>{
  await assert.rejects(readProductCalendar({name:'calendar.xls',bytes:new Uint8Array([1])}),/请选择 XLSX/);
+ await assert.rejects(readProductCalendar({name:'损坏.xlsx',bytes:new Uint8Array([1,2,3])}),/无法读取这份 Excel.*重新选择/);
  const z=new JSZip();z.file('xl/workbook.xml','<!DOCTYPE x [<!ENTITY e SYSTEM "file:///secret">]><workbook/>');z.file('xl/_rels/workbook.xml.rels','<Relationships/>');
  await assert.rejects(readProductCalendar({name:'calendar.xlsx',bytes:await z.generateAsync({type:'uint8array'})}),/外部声明/);
 });

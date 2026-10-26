@@ -1,5 +1,5 @@
 import {NS,parseXml,serializeXml,elements,children,textOf,sha256,isVisibleBranch} from './office-xml.js';
-import {deliveryName,currentMonth,uniqueDeliveryNames} from './naming.js';
+import {deliveryName,currentMonth,uniqueDeliveryNames} from './naming.js?v=20261026-drop';
 import {OfficePackage,fail,tag,create,setW,directElements,allocateWordIds,wordCommentPart,enableWordTracking,repairPptCommentAuthors,createPptCommentState,addPptComment,subsetPresentation,presentationOrder,validatePackage} from './office-package.js';
 
 const AUTHOR='产品要素核对';
