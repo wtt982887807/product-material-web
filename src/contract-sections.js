@@ -68,7 +68,7 @@ function chapters(contract){
   const same=found.find(s=>s.signature===signature);
   const ids=unique([lines[i].id,...content.map(l=>l.id)]);
   if(same){same.evidence.blockIds=unique([...same.evidence.blockIds,...ids]);same.evidence.duplicateCount++;}
-  else found.push({...h,signature,...parsed,evidence:{blockId:lines[i].id,blockIds:ids,quote,itemCount:parsed.items.length,noteCount:parsed.notes.length,duplicateCount:0}});
+  else found.push({...h,signature,content,...parsed,evidence:{blockId:lines[i].id,blockIds:ids,quote,itemCount:parsed.items.length,noteCount:parsed.notes.length,duplicateCount:0}});
   i=end-1;
  }
  CACHE.set(contract,{signature,sections:found});return found;
@@ -158,13 +158,95 @@ function materialReview(task,m,key,scope,items){
   return {title:s.title,contractText:item.text,templateText:selected.text,...compare(item.text,selected.text)};
  });
  const extra=chunks.filter((c,i)=>!used.has(i)&&!noteLine(c.text)&&!heading(c.text)).map(c=>({title:c.title,contractText:'',templateText:c.text,status:'uncertain',reason:'模板存在本节尚未对应的条目，可能来自补充说明或其他章节，请核对。'}));
- return {materialId:m.materialId,name:m.template?.name||m.name||m.materialId,matched:rows.filter(r=>r.status!=='missing').length,total:items.length,items:rows,extra};
+ return {materialId:m.materialId,name:m.template?.name||m.name||m.materialId,fieldIds:fields.map(f=>f.id),matched:rows.filter(r=>r.status!=='missing').length,total:items.length,items:rows,extra};
+}
+
+const strategyName=text=>clean(numbering(text).text).replace(/[\s。;；:：]+$/g,'').replace(/\s/g,'').replace(/投资策略$/,'策略');
+const conditionalStrategy=text=>/(?:发生情形|发生情况|情形和条件|适用条件|特殊情形|超过.*(?:%|％)|突破.*(?:%|％))/.test(text);
+function shortStrategyTitles(text){
+ const parts=raw(text).replace(/策略[、]/g,'策略\n').split(/[\r\n;；,，]+/).map(raw).filter(Boolean);
+ if(!parts.length)return null;
+ const titles=parts.map(p=>({text:p,title:numbering(p).text.replace(/[。;；:：]+$/g,'').trim(),key:strategyName(p)}));
+ if(titles.some(t=>t.title.length>55||!t.title.endsWith('策略')||/[。;；:：%％]/.test(t.title)||conditionalStrategy(t.title)))return null;
+ return titles;
+}
+function strategyHierarchy(section,templateTitles){
+ const lines=section.content||[],root={title:'',rank:0,children:[]},nodes=[root],stack=[root];
+ for(let i=0;i<lines.length;i++){
+  const n=numbering(lines[i].text),inline=n.text.match(/^([^：:]{2,55}策略)[:：]/),title=inline?inline[1]:n.text;
+  const standalone=!n.rank&&title.length<=55&&title.endsWith('策略');
+  if(!(n.rank||standalone)||title.length>140||/[。;；:：]/.test(title))continue;
+  const rank=n.rank||section.rank+1;
+  while(stack.length>1&&stack.at(-1).rank>=rank)stack.pop().end=i;
+  const node={title,rank,start:i,end:lines.length,children:[],parent:stack.at(-1)};
+  node.parent.children.push(node);nodes.push(node);stack.push(node);
+ }
+ const wanted=new Set(templateTitles.map(t=>t.key));
+ const governance=/^(?:决策依据|投资决策程序|投资管理的方法和标准|投资交易程序|投资风险的监控与绩效评估)$/;
+ const groups=nodes.map(parent=>{
+  const items=parent.children.filter(n=>!conditionalStrategy(n.title)&&!governance.test(n.title));
+  if(!items.some(n=>n.title.endsWith('策略')))return null;
+  const score=items.filter(n=>wanted.has(strategyName(n.title))).length;
+  return {items,notes:parent.children.filter(n=>conditionalStrategy(n.title)),score};
+ }).filter(Boolean);
+ if(!groups.length)return null;
+ const score=Math.max(...groups.map(g=>g.score)),best=groups.filter(g=>g.score===score);
+ if(best.length!==1)return {ambiguous:true,items:[],notes:[]};
+ const describe=n=>({title:n.title,text:lines.slice(n.start,n.end).map(l=>l.text).join('\n'),blockIds:unique(lines.slice(n.start,n.end).map(l=>l.id))});
+ return {ambiguous:false,items:best[0].items.map(describe),notes:best[0].notes.map(describe)};
+}
+function strategyContext(contract,titles,scope={}){
+ let sections=chapters(contract).filter(s=>s.key==='investment_strategy');if(!sections.length)return null;
+ sections=sections.filter(s=>!['share','channel'].some(k=>s.scope[k]&&scope[k]&&s.scope[k]!==scope[k]));if(!sections.length)return null;
+ const versions=sections.map(section=>({section,tree:strategyHierarchy(section,titles)}));
+ if(versions.every(v=>!v.tree))return null;
+ const conditionNorm=s=>clean(s).replace(/[\s·•,，。;；:：、【】\[\]"“”'‘’]/g,'');
+ const semanticCondition=scope.condition&&!titles.some(t=>conditionNorm(t.text)===conditionNorm(scope.condition))&&conditionNorm(titles.map(t=>t.text).join('；'))!==conditionNorm(scope.condition);
+ const ambiguous=!!semanticCondition||versions.some(v=>!v.tree||v.tree.ambiguous)||sections.some(s=>['share','channel'].some(k=>s.scope[k]&&!scope[k]));
+ const evidence=versions.map(({section,tree})=>({...section.evidence,blockIds:[...section.evidence.blockIds],...(tree&&!tree.ambiguous?{itemCount:tree.items.length,noteCount:tree.notes.length}: {})}));
+ const items=[...new Map(versions.flatMap(v=>v.tree?.items||[]).map(i=>[strategyName(i.title)+'|'+canonical(i.text),i])).values()];
+ const notes=[...new Map(versions.flatMap(v=>v.tree?.notes||[]).map(i=>[canonical(i.text),{title:i.title,contractText:i.text,blockIds:[...i.blockIds]}])).values()];
+ return {ambiguous,conflict:sections.length>1,evidence,items,notes};
+}
+function strategyRows(context,titles){
+ const keys=new Set(titles.map(t=>t.key)),known=new Set(context.items.map(i=>strategyName(i.title)));
+ const items=context.items.map(item=>{
+  const title=numbering(item.title).text,found=titles.find(t=>t.key===strategyName(title));
+  return {title,contractText:title,templateText:found?.text||'',status:found?(context.ambiguous||context.conflict?'uncertain':'same'):'missing',reason:found?'策略标题与合同对应，保持标题摘要及模板原话术；完整正文在合同依据中。':'模板未呈现该策略标题，请核对是否补充；不会自动展开策略正文。'};
+ });
+ const extra=titles.filter(t=>!known.has(t.key)).map(t=>({title:t.title,contractText:'',templateText:t.text,status:'uncertain',reason:'合同对应策略层级未找到该标题，请核对，不按相同资产类别替代另一策略。'}));
+ return {items,extra,matched:context.items.filter(i=>keys.has(strategyName(i.title))).length,total:context.items.length};
+}
+
+export function resolveStrategySummary(contract,text,scope={}){
+ const titles=shortStrategyTitles(text);if(!titles||!contract)return null;
+ const context=strategyContext(contract,titles,scope);if(!context)return null;
+ const rows=strategyRows(context,titles),missing=rows.items.filter(i=>i.status==='missing').map(i=>i.title);
+ const status=context.conflict?'conflict':context.ambiguous||missing.length||rows.extra.length?'pending':'verified';
+ const reason=status==='verified'?`合同对应${rows.total}个策略标题，模板采用标题摘要，原文字保持不变。`:
+ context.conflict||context.ambiguous?'投资策略存在不同章节版本、标题层级或适用范围歧义，请核对完整依据。':
+ [missing.length?'模板未呈现：'+missing.join('、'):'',rows.extra.length?'合同未对应：'+rows.extra.map(i=>i.title).join('、'):''].filter(Boolean).join('；')+'。请核对标题增减，不自动扩写正文。';
+ return {status,value:status==='verified'?text:null,evidence:context.evidence,reason,reasonType:status==='verified'?'confirmed':'needs_review'};
+}
+function strategySectionReview(task,facts,scope){
+ const targets=(task.materials||[]).map(m=>({m,fields:(m.fields||[]).filter(f=>fieldMatches(task,f,'investment_strategy',scope))})).filter(t=>t.fields.length);
+ for(const target of targets){target.source=unique(target.fields.map(f=>String(f.after??f.before??''))).join('\n');target.titles=shortStrategyTitles(target.source);}
+ const titles=targets.flatMap(t=>t.titles||[]);if(!titles.length)return null;
+ const context=strategyContext(task.contract,titles,scope);if(!context)return null;
+ if(facts.some(f=>!sameScope(factScope(task,f),scope)))context.ambiguous=true;
+ const materials=targets.map(({m,titles})=>titles?{materialId:m.materialId,name:m.template?.name||m.name||m.materialId,...strategyRows(context,titles)}:materialReview(task,m,'investment_strategy',scope,context.items)).filter(Boolean);
+ if(!materials.length)return null;
+ const statuses=materials.flatMap(m=>[...m.items,...m.extra]).map(i=>i.status),missing=unique(materials.flatMap(m=>m.items.filter(i=>i.status==='missing').map(i=>i.title)));
+ const kind=context.conflict||context.ambiguous||statuses.includes('uncertain')?'uncertain':statuses.includes('missing')?'structure':'aligned';
+ const summary=context.conflict||context.ambiguous?'投资策略存在不同章节版本、标题层级或适用范围歧义，请核对完整依据。':missing.length?'策略标题摘要未呈现：'+missing.join('、')+'。请核对是否补充；不会自动扩写正文。':statuses.includes('uncertain')?'模板包含合同对应层级未能确认的策略标题，请核对。':`合同对应${context.items.length}个策略标题，当前模板标题摘要已对应；保留原话术及格式。`;
+ return {id:'section-investment_strategy-'+JSON.stringify({share:scope.share||'',channel:scope.channel||'',issuer:scope.issuer||'',period:scope.period||'',condition:scope.condition||''}),key:'investment_strategy',label:'投资策略',evidence:context.evidence,materials,notes:context.notes,kind,needsReview:kind!=='aligned',summary:summary+(context.notes.length?`另有${context.notes.length}条条件性说明，已单列并保留完整依据。`:'')};
 }
 
 export function getSectionReview(task,factIds){
  const ids=new Set(factIds||[]),facts=(task?.facts||[]).filter(f=>ids.has(f.id)&&LABELS[f.key]);
  if(!facts.length||!task.contract||new Set(facts.map(f=>f.key)).size!==1)return null;
  const key=facts[0].key,label=LABELS[key],scope=factScope(task,facts[0]);
+ if(key==='investment_strategy'){const strategy=strategySectionReview(task,facts,scope);if(strategy)return strategy;}
  let sections=chapters(task.contract).filter(s=>s.key===key);if(!sections.length)return null;
  const scopeUncertain=!!scope.condition||facts.some(f=>!sameScope(factScope(task,f),scope));
  const explicitMismatch=s=>['share','channel'].some(k=>s.scope[k]&&scope[k]&&s.scope[k]!==scope[k]);
@@ -180,5 +262,6 @@ export function getSectionReview(task,factIds){
  const missing=unique(materials.flatMap(m=>m.items.filter(i=>i.status==='missing').map(i=>i.title)));
  const needsReview=kind==='structure'||kind==='uncertain';
  const summary=ambiguous?`${label}存在多个不同章节或适用范围尚不明确，请对照完整依据确认，未自动选择或合并。`:missing.length?`${label}完整依据共${items.length}项；部分物料未呈现：${missing.join('、')}。可能是摘要，请逐份核对是否补充。`:kind==='structure'?`${label}发现计量口径或条件差异，请查看逐项对照。`:kind==='uncertain'?`${label}存在尚不能确认对应关系的条目，请查看完整依据。`:statuses.includes('summary')?`${label}完整依据共${items.length}项，模板包含摘要表述；类别对应不代表已核实全部数值及条件，可展开完整依据核对。`:`${label}完整依据共${items.length}项，当前物料均已对应；保留原有局部更新规则。`;
- return {id:'section-'+key+'-'+JSON.stringify({share:scope.share||'',channel:scope.channel||'',issuer:scope.issuer||'',period:scope.period||'',condition:scope.condition||''}),key,label,evidence:sections.map(s=>({...s.evidence,blockIds:[...s.evidence.blockIds]})),materials,kind,needsReview,summary};
+ const replacement=key==='investment_ratios'&&!ambiguous?{lines:sections[0].content.map(line=>line.text)}:undefined;
+ return {id:'section-'+key+'-'+JSON.stringify({share:scope.share||'',channel:scope.channel||'',issuer:scope.issuer||'',period:scope.period||'',condition:scope.condition||''}),key,label,evidence:sections.map(s=>({...s.evidence,blockIds:[...s.evidence.blockIds]})),materials,kind,needsReview,summary,...(replacement?{replacement}:{})};
 }

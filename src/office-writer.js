@@ -83,7 +83,77 @@ function runPiece(run,text,kind,{deleted=false}={}) {
 function replaceNodeWith(node,pieces){const parent=node.parentNode;for(const piece of pieces)parent.insertBefore(piece,node);parent.removeChild(node);}
 function revision(doc,type,id,timestamp){const node=create(doc,W,`w:${type}`);setW(node,'id',id);setW(node,'author',AUTHOR);setW(node,'date',timestamp);return node;}
 
+const sectionReplacement=op=>op.kind==='replace'&&op.source==='contract_section';
+function sectionContent(entry,kind){
+  const {paragraph,op}=entry,ns=kind==='docx'?W:A;
+  if(op.start!==0||op.before!==textOf(paragraph,kind))failAt(entry,'合同条款更新必须准确对应整段原文');
+  const all=directElements(paragraph),content=all.filter(n=>tag(n,ns,'r')||kind==='pptx'&&tag(n,A,'br'));
+  const first=all.indexOf(content[0]),last=all.indexOf(content.at(-1));
+  for(const [index,node]of all.entries()){
+    if(tag(node,ns,'pPr')||kind==='pptx'&&tag(node,A,'endParaRPr'))continue;
+    if(kind==='docx'&&node.namespaceURI===W&&['bookmarkStart','bookmarkEnd','commentRangeStart','commentRangeEnd','proofErr','permStart','permEnd'].includes(node.localName)&&!(index>first&&index<last))continue;
+    if(tag(node,ns,'r')){
+      const allowed=kind==='docx'?['rPr','t','br','cr']:['rPr','t'];
+      if(directElements(node).some(n=>n.namespaceURI!==ns||!allowed.includes(n.localName)))failAt(entry,'整段包含域、制表或非普通文字结构，无法安全更新');
+      if(kind==='docx'&&wordFieldDepthBefore(node))failAt(entry,'整段位于 Word 域内，无法安全更新');
+    }else if(!(kind==='pptx'&&tag(node,A,'br')&&directElements(node).every(n=>tag(n,A,'rPr'))))failAt(entry,'整段包含特殊结构或内部批注边界，无法安全更新');
+  }
+  if(!content.length)failAt(entry,'整段没有可处理的文字');
+  return content;
+}
+function sectionStyleLines(paragraph,kind){
+  const lines=[{text:'',spans:[]}];
+  for(const record of textRecords(paragraph,kind)){
+    const run=tag(record.node.parentNode,kind==='docx'?W:A,'r')?record.node.parentNode:null;
+    const pieces=record.text.split('\n');
+    pieces.forEach((text,i)=>{if(i)lines.push({text:'',spans:[]});const line=lines.at(-1),start=line.text.length;line.text+=text;if(text&&run)line.spans.push({start,end:line.text.length,run});});
+  }
+  return lines;
+}
+function sectionRegions(text){
+  const prefix=text.match(/^\s*(?:(?:[（(][\d一二三四五六七八九十百]+[）)]|[\d一二三四五六七八九十百]+[.．、)])\s*)/)?.[0].length||0;
+  const colon=text.slice(prefix).search(/[:：]/),title=colon>=0&&colon<=80?prefix+colon+1:prefix;
+  return [[0,prefix],[prefix,title],[title,text.length]];
+}
+function sectionStyledRuns(line,source,fallback,kind){
+  const target=sectionRegions(line),origin=sectionRegions(source.text),runs=[];
+  for(let i=0;i<target.length;i++){
+    let remaining=line.slice(...target[i]);if(!remaining)continue;
+    const [start,end]=origin[i],spans=source.spans.filter(s=>s.end>start&&s.start<end);
+    if(!spans.length){const seed=(i===2?source.spans.at(-1):source.spans[0])?.run||fallback;runs.push(runPiece(seed,remaining,kind));continue;}
+    for(let j=0;j<spans.length&&remaining;j++){
+      const span=spans[j],length=j===spans.length-1?remaining.length:Math.min(remaining.length,Math.min(end,span.end)-Math.max(start,span.start));
+      if(length){runs.push(runPiece(span.run,remaining.slice(0,length),kind));remaining=remaining.slice(length);}
+    }
+  }
+  return runs;
+}
+function sectionBreak(run,kind){
+  const doc=run.ownerDocument;
+  if(kind==='docx'){const clone=run.cloneNode(true);for(const n of directElements(clone))if(!tag(n,W,'rPr'))clone.removeChild(n);clone.appendChild(create(doc,W,'w:br'));return clone;}
+  const br=create(doc,A,'a:br'),properties=children(run,A,'rPr')[0];if(properties)br.appendChild(properties.cloneNode(true));return br;
+}
+function replaceSection(entry,kind,nextId,timestamp){
+  const {paragraph,op}=entry,content=sectionContent(entry,kind),lines=sectionStyleLines(paragraph,kind);
+  const fallback=lines.flatMap(line=>line.spans)[0]?.run||content.find(n=>tag(n,kind==='docx'?W:A,'r'));
+  if(!fallback)failAt(entry,'整段缺少可继承的文字样式');
+  const next=[];
+  if(op.after)op.after.split('\n').forEach((line,index)=>{
+    if(index)next.push(sectionBreak(next.filter(n=>tag(n,kind==='docx'?W:A,'r')).at(-1)||fallback,kind));
+    next.push(...sectionStyledRuns(line,lines[Math.min(index,lines.length-1)],fallback,kind));
+  });
+  const nodes=[],ids=[];
+  if(kind==='docx'){
+    const del=revision(paragraph.ownerDocument,'del',nextId(),timestamp);ids.push(del.getAttributeNS(W,'id'));
+    for(const old of content){const clone=old.cloneNode(true);for(const t of children(clone,W,'t')){const d=create(paragraph.ownerDocument,W,'w:delText');for(const attr of Array.from(t.attributes||[]))d.setAttributeNS(attr.namespaceURI,attr.name,attr.value);d.textContent=t.textContent;clone.replaceChild(d,t);}del.appendChild(clone);}nodes.push(del);
+    if(next.length){const ins=revision(paragraph.ownerDocument,'ins',nextId(),timestamp);ids.push(ins.getAttributeNS(W,'id'));for(const node of next)ins.appendChild(node);nodes.push(ins);}
+  }else nodes.push(...next);
+  for(const node of nodes)paragraph.insertBefore(node,content[0]);for(const node of content)paragraph.removeChild(node);
+  return kind==='docx'?{revisionIds:ids,section:true}:{replaced:true,section:true};
+}
+
 function replace(entry,kind,nextId,timestamp) {
+  if(sectionReplacement(entry.op))return replaceSection(entry,kind,nextId,timestamp);
   const segments=runSegments(entry,kind),ids=[];let remaining=entry.op.after;
   for(let i=0;i<segments.length;i++){
     const s=segments[i],left=Math.max(0,entry.start-s.start),right=Math.min(s.text.length,entry.end-s.start);
@@ -176,7 +246,7 @@ async function prepare(pkg,review) {
     if(!op.id||ids.has(op.id))fail('审阅操作编号缺失或重复。');ids.add(op.id);
     if(!['replace','highlight','comment'].includes(op.kind))fail(`不支持的审阅操作：${op.kind}`);
     if(!Number.isInteger(op.start)||op.start<0||typeof op.before!=='string'||!op.before.length)fail('审阅操作缺少有效原文位置。');
-    if(op.kind==='replace'&&(typeof op.after!=='string'||/[\r\n\t]/.test(op.after)))fail('替换内容包含不支持的分段或制表结构，需人工核对。');
+    if(op.kind==='replace'&&(typeof op.after!=='string'||(sectionReplacement(op)?/[\r\t]/:/[\r\n\t]/).test(op.after)))fail('替换内容包含不支持的分段或制表结构，需人工核对。');
     const descriptor=paragraphsById.get(op.paragraphId);
     if(!descriptor||descriptor.part!==op.part||descriptor.index!==op.index)fail(`审阅操作无法唯一定位原段落：${op.id}`);
     if(!Number.isInteger(op.index)||op.index<0)fail('审阅段落编号无效。');
@@ -187,11 +257,12 @@ async function prepare(pkg,review) {
     if(source!==descriptor.text)failAt(entry,'模板内容在审阅后发生变化');
     if(source.slice(entry.start,entry.end)!==op.before)failAt(entry,'审阅原文与指定位置不匹配');
     if(kind==='docx'&&op.kind==='comment'&&op.part!=='word/document.xml')failAt(entry,'页眉、页脚或脚注中的批注暂不支持，请人工核对');
-    runSegments(entry,kind);
+    if(sectionReplacement(op))sectionContent(entry,kind);else runSegments(entry,kind);
     const key=`${op.part}\u0000${op.index}`;
     if(!groups.has(key))groups.set(key,{paragraph,source,entries:[]});groups.get(key).entries.push(entry);
   }
   for(const group of groups.values()){
+    if(group.entries.some(e=>sectionReplacement(e.op))&&group.entries.length!==1)failAt(group.entries[0],'合同整段更新不能与同段其他操作混用');
     const replacements=group.entries.filter(e=>e.op.kind==='replace').sort((a,b)=>a.start-b.start);
     for(let i=1;i<replacements.length;i++)if(overlaps(replacements[i-1],replacements[i]))failAt(replacements[i],'替换范围重叠，需先合并审阅操作');
     for(const e of group.entries)if(e.op.kind!=='replace')for(const r of replacements){
