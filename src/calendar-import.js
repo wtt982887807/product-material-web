@@ -143,7 +143,8 @@ export function calendarOpeningRange(row){
 // The complete schedule is one input: do not drop its end or its window rules.
 export function calendarSupplementText(row){
  const {start,value}=calendarOpeningRange(row);
- const pairs=[['产品代码',row.productCode],['本次开放日',value],['开放期',row.openingPeriod],['业绩报酬',row.performanceText],['业绩比较基准',row.benchmark]];
+ // Recurring opening rules come from the contract, not the calendar supplement.
+ const pairs=[['产品代码',row.productCode],['本次开放日',value],['业绩报酬',row.performanceText],['业绩比较基准',row.benchmark]];
  if(start&&row.openingDateNote)pairs.push(['分段规则',String(row.openingDateNote).replace(/[;；\r\n]+/g,'，')]);
  return pairs.filter(([,value])=>value!==undefined&&value!==null&&value!=='').map(([label,value])=>label+'：'+value).join('\n');
 }
