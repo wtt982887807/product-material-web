@@ -84,16 +84,21 @@ function updateProduct(stem, targetName, templateProductName) {
   return header+target;
 }
 function updateMonth(stem, month) {
+  const date8=/(?<!\d)20\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])(?!\d)/g;
   const month6=/(?<!\d)20\d{2}(?:0[1-9]|1[0-2])(?!\d)/g;
   const month4=/(?<!\d)\d{2}(?:0[1-9]|1[0-2])(?!\d)/g;
   let found=false;
-  let result=stem.replace(/【([^】]*)】/g,(_whole,prefix)=>{
+  // Production dates belong to leading delivery headers, never to product names.
+  const header=stem.match(/^(?:\s*【[^】]*】\s*)*/u)[0];
+  let result=header.replace(/【([^】]*)】/g,(_whole,prefix)=>{
+    prefix=prefix.replace(date8,()=>{found=true;return month;});
     if(month6.test(prefix)) {month6.lastIndex=0;found=true;return '【'+prefix.replace(month6,month)+'】';}
     month6.lastIndex=0;
     if(month4.test(prefix)) {month4.lastIndex=0;found=true;return '【'+prefix.replace(month4,month.slice(2))+'】';}
     month4.lastIndex=0;return _whole;
   });
-  if(!found) result=/【[^】]*】/.test(result)?result.replace(/【([^】]*)】/,(_whole,prefix)=>'【'+prefix+' '+month+'】'):'【'+month+'】'+result;
+  if(!found) result=header?result.replace(/【([^】]*)】/,(_whole,prefix)=>'【'+prefix+' '+month+'】'):'【'+month+'】';
+  result+=stem.slice(header.length);
   return result;
 }
 export function deliveryName(originalName,{targetName,templateProductName='',kind,month=currentMonth()}={}) {

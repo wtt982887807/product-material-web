@@ -1,4 +1,4 @@
-import {currentMonth,deliveryName,resolveProductionMonth,monthInputValue,uniqueDeliveryNames} from './naming.js';
+import {currentMonth,deliveryName,resolveProductionMonth,monthInputValue,uniqueDeliveryNames} from './naming.js?v=20261026-drop';
 
 const $=id=>document.getElementById(id);
 const state={contract:null,templates:[],task:null,filter:'focus',busy:false,urls:[],month:currentMonth(),manualMonth:undefined,monthValid:true,started:new Date(),run:0,company:null,companyIsDefault:false,companyReady:false,companyPersisted:false,companyStored:false,companyWarning:'',store:null,reviewApi:null,calendar:null,calendarMatches:[],supplementPreview:null};
@@ -79,7 +79,7 @@ for(const [id,kind]of [['contract-drop','contract'],['templates-drop','templates
  const box=$(id);box.addEventListener('dragover',e=>{e.preventDefault();box.classList.add('dragging');});box.addEventListener('dragleave',()=>box.classList.remove('dragging'));box.addEventListener('drop',e=>{e.preventDefault();box.classList.remove('dragging');if(kind==='company')selectCompany(e.dataTransfer.files);else selectFiles(kind,e.dataTransfer.files);});
 }
 function progress(title,detail){$('progress-panel').hidden=false;$('progress-title').textContent=title;$('progress-detail').textContent=detail;}
-function setBusy(busy){state.busy=busy;for(const id of ['contract-input','templates-input','company-input','company-clear','month-value','month-reset','reset-button','calendar-input','calendar-row','supplement-text','supplement-parse','supplement-text-tab','supplement-excel-tab'])$(id).disabled=busy;document.querySelectorAll('#facts-list input,#facts-list textarea,#facts-list button,#supplement-preview button').forEach(n=>n.disabled=busy);refreshSelection();}
+function setBusy(busy){state.busy=busy;$('calendar-drop').setAttribute('aria-busy',String(busy));if(busy)$('calendar-drop').classList.remove('dragging');for(const id of ['contract-input','templates-input','company-input','company-clear','month-value','month-reset','reset-button','calendar-input','calendar-row','supplement-text','supplement-parse','supplement-text-tab','supplement-excel-tab'])$(id).disabled=busy;document.querySelectorAll('#facts-list input,#facts-list textarea,#facts-list button,#supplement-preview button').forEach(n=>n.disabled=busy);refreshSelection();}
 $('dismiss-error').onclick=()=>$('error-panel').hidden=true;
 $('reset-button').onclick=()=>{state.run++;state.contract=null;state.templates=[];$('contract-input').value='';$('templates-input').value='';invalidate();updateMonth(true);refreshSelection();$('upload-section').hidden=false;window.scrollTo({top:0,behavior:'smooth'});};
 $('analyze-button').onclick=async()=>{
@@ -124,7 +124,8 @@ function renderFact(fact){
  return row;
 }
 function isConfirmed(f){return f.userConfirmed===true||f.source==='user_confirmation';}
-function reviewEdited(message){clearDownloads();state.supplementPreview=null;$('supplement-preview').hidden=true;$('error-panel').hidden=true;changeStep('review');renderReview();$('supplement-notice').textContent=message;$('supplement-notice').hidden=false;}
+function discardSupplementPreview(){state.supplementPreview=null;$('supplement-preview').hidden=true;}
+function reviewEdited(message){clearDownloads();discardSupplementPreview();$('error-panel').hidden=true;changeStep('review');renderReview();$('supplement-notice').textContent=message;$('supplement-notice').hidden=false;}
 function groups(){return state.reviewApi?.getSupplementGroups?state.reviewApi.getSupplementGroups(state.task):state.task.facts.map(f=>({id:f.id,label:f.label,kind:'text',factIds:[f.id],status:f.status}));}
 function groupFacts(group){return group.factIds.map(id=>state.task.facts.find(f=>f.id===id)).filter(Boolean);}
 function scopedGroupLabel(group){const s=group.scope||{},parts=[s.share?s.share+'类份额':'',s.channel,s.issuer==='distributor'?'代销口径':''].filter(Boolean);return group.label+(parts.length?' · '+parts.join(' · '):'');}
@@ -138,7 +139,7 @@ function renderGroup(group){
  const details=el('details');details.append(el('summary','','查看依据与物料位置'));const seenEvidence=new Set();for(const f of fs)for(const e of(f.evidence||[])){const k=e.blockId+'|'+e.quote;if(seenEvidence.has(k))continue;seenEvidence.add(k);details.append(el('p','',sourceTitle(e)),el('blockquote','',e.quote||''));}
  const factIds=new Set(group.factIds);for(const m of state.task.materials)for(const field of m.fields.filter(f=>f.factIds?.some(id=>factIds.has(id)))){const occurrence=el('div','occurrence');occurrence.append(el('strong','',m.template.name+' · '+field.label));if(field.before!==field.after){const b=el('p'),a=el('p');b.append(el('del','',field.before));a.append(el('ins','',field.after??field.before));occurrence.append(b,a);}else occurrence.append(el('p','',field.before));details.append(occurrence);}row.append(details);
  if(pending||['date','performance','benchmark','code','opening'].includes(group.kind)){
-  const form=el('form','supplement'),input=el(group.kind==='performance'?'textarea':'input');input.placeholder=examples[group.kind]||examples.text;input.setAttribute('aria-label','补充'+label);if(input.tagName==='TEXTAREA'||group.kind==='performance')input.rows=2;const button=el('button','','预览补充');button.type='submit';form.append(input,button);form.onsubmit=e=>{e.preventDefault();if(state.busy||!input.value.trim())return;try{showSupplementPreview(state.reviewApi.previewSupplement(state.task,group.id,input.value),{label});}catch(error){showError(error);}};row.append(form);
+  const form=el('form','supplement'),input=el(group.kind==='performance'?'textarea':'input');input.placeholder=examples[group.kind]||examples.text;input.setAttribute('aria-label','补充'+label);input.addEventListener('input',discardSupplementPreview);if(input.tagName==='TEXTAREA'||group.kind==='performance')input.rows=2;const button=el('button','','预览补充');button.type='submit';form.append(input,button);form.onsubmit=e=>{e.preventDefault();if(state.busy||!input.value.trim())return;try{showSupplementPreview(state.reviewApi.previewSupplement(state.task,group.id,input.value),{label});}catch(error){showError(error);}};row.append(form);
  }
  if(pending||confirmed){const actions=el('div','fact-actions'),confirm=el('button','text-button',confirmed&&!pending?'撤销确认':'确认无误');confirm.type='button';confirm.setAttribute('aria-label',(confirmed&&!pending?'撤销确认':'确认无误')+'：'+label);confirm.onclick=()=>{if(state.busy)return;try{const undo=confirmed&&!pending;state.task=state.reviewApi.confirmFacts(state.task,group.factIds,!undo);reviewEdited(undo?'已撤销确认，对应原值恢复待核标记。':'已确认原值无误。PPT 和海报不再添加对应待核标黄或批注，Word 已有审阅修订继续保留。');}catch(error){showError(error);}};actions.append(confirm,el('span','','确认原值；保留 Word 本轮修订'));row.append(actions);}
  return row;
@@ -153,7 +154,7 @@ function showSupplementPreview(preview,origin={}){
 }
 function switchSupplement(mode){if(state.busy)return;for(const kind of ['text','excel']){$('supplement-'+kind+'-panel').hidden=kind!==mode;$('supplement-'+kind+'-tab').classList.toggle('selected',kind===mode);$('supplement-'+kind+'-tab').setAttribute('aria-pressed',String(kind===mode));}state.supplementPreview=null;$('supplement-preview').hidden=true;}
 $('supplement-text-tab').onclick=()=>switchSupplement('text');$('supplement-excel-tab').onclick=()=>switchSupplement('excel');
-$('supplement-text').addEventListener('input',()=>{state.supplementPreview=null;$('supplement-preview').hidden=true;});
+$('supplement-text').addEventListener('input',discardSupplementPreview);
 $('supplement-parse').onclick=()=>{if(state.busy||!state.task)return;try{showSupplementPreview(state.reviewApi.previewSupplementText(state.task,$('supplement-text').value),{label:'文字补充'});}catch(error){showError(error);}};
 function previewCalendarRow(){
  state.supplementPreview=null;$('supplement-preview').hidden=true;const row=state.calendar?.rows.find(r=>r.id===$('calendar-row').value),box=$('calendar-row-detail');box.replaceChildren();if(!row)return;
@@ -166,12 +167,21 @@ function previewCalendarRow(){
  try{const preview=state.reviewApi.previewSupplementText(state.task,text);preview.source={...source,productName:row.productName};showSupplementPreview(preview,{label:'Excel 产品行',note:matched?'请核对下列数值，确认后同步到相关物料。':'这些数值来自另一产品行，仅在确认适用时应用。'});}catch(error){box.append(el('p','supplement-warning',error.message||String(error)));}
 }
 $('calendar-row').addEventListener('change',previewCalendarRow);
-$('calendar-input').addEventListener('change',async e=>{
- if(state.busy||!state.task)return;const file=e.target.files?.[0];if(!file)return;state.supplementPreview=null;$('supplement-preview').hidden=true;
- if(!/\.xlsx$/i.test(file.name)||file.size>30*1024*1024){showError(new Error('请选择30 MB以内的 XLSX 产品日历。'));$('calendar-input').value='';return;}
- setBusy(true);$('calendar-status').textContent='正在本机读取产品日历…';await nextPaint();try{const {readProductCalendar,matchCalendarRows}=await import('./calendar-import.js?v=20261026');const calendar=await readProductCalendar({name:file.name,bytes:new Uint8Array(await file.arrayBuffer())});state.calendar=calendar;const matches=matchCalendarRows(calendar,state.task.target.name);state.calendarMatches=matches.map(r=>r.id);const select=$('calendar-row');select.replaceChildren();const blank=el('option','','请选择产品行');blank.value='';select.append(blank);for(const row of [...matches,...calendar.rows.filter(r=>!state.calendarMatches.includes(r.id))]){const option=el('option','',(state.calendarMatches.includes(row.id)?'匹配产品 · ':'')+row.productName+(row.productCode?' · '+row.productCode:'')+' · 第'+row.source.row+'行');option.value=row.id;select.append(option);}select.hidden=false;$('calendar-row-label').hidden=false;$('calendar-row-detail').replaceChildren();$('calendar-status').textContent=`已读取 ${calendar.rows.length} 条产品记录。`+(matches.length===1?'已定位到合同产品，请核对解析结果。':matches.length>1?'同一产品有多条记录，请选择本次所用行。':'未找到合同产品的对应行，可手动选择并核对，或使用文字补充。')+(calendar.warnings?.length?' '+calendar.warnings.join('；'):'');select.value=matches.length===1?matches[0].id:'';if(select.value)previewCalendarRow();}
+function clearCalendarImport(){state.calendar=null;state.calendarMatches=[];discardSupplementPreview();$('calendar-row').replaceChildren();$('calendar-row').value='';$('calendar-row').hidden=true;$('calendar-row-label').hidden=true;$('calendar-row-detail').replaceChildren();$('calendar-input').value='';}
+async function selectCalendar(files){
+ if(state.busy||!state.task)return;const list=Array.from(files||[]);if(!list.length)return;
+ clearCalendarImport();$('supplement-notice').hidden=true;$('error-panel').hidden=true;$('calendar-status').textContent='此文件未导入，已有补充与核对结果保留。';
+ if(list.length!==1){showError(new Error('每次请拖入或选择一份 XLSX 产品日历。'));return;}
+ const file=list[0];if(!/\.xlsx$/i.test(file.name)||file.size>30*1024*1024){showError(new Error('请选择30 MB以内的 XLSX 产品日历。'));return;}
+ setBusy(true);$('calendar-status').textContent='正在本机读取产品日历…';await nextPaint();try{const {readProductCalendar,matchCalendarRows}=await import('./calendar-import.js?v=20261026-drop');const calendar=await readProductCalendar({name:file.name,bytes:new Uint8Array(await file.arrayBuffer())});state.calendar=calendar;const matches=matchCalendarRows(calendar,state.task.target.name);state.calendarMatches=matches.map(r=>r.id);const select=$('calendar-row');select.replaceChildren();const blank=el('option','','请选择产品行');blank.value='';select.append(blank);for(const row of [...matches,...calendar.rows.filter(r=>!state.calendarMatches.includes(r.id))]){const option=el('option','',(state.calendarMatches.includes(row.id)?'匹配产品 · ':'')+row.productName+(row.productCode?' · '+row.productCode:'')+' · 第'+row.source.row+'行');option.value=row.id;select.append(option);}select.hidden=false;$('calendar-row-label').hidden=false;$('calendar-row-detail').replaceChildren();$('calendar-status').textContent=`已读取 ${calendar.rows.length} 条产品记录。`+(matches.length===1?'已定位到合同产品，请核对解析结果。':matches.length>1?'同一产品有多条记录，请选择本次所用行。':'未找到合同产品的对应行，可手动选择并核对，或使用文字补充。')+(calendar.warnings?.length?' '+calendar.warnings.join('；'):'');select.value=matches.length===1?matches[0].id:'';if(select.value)previewCalendarRow();}
  catch(error){$('calendar-status').textContent='此文件未导入，已有补充与核对结果保留。';showError(error);}finally{$('calendar-input').value='';setBusy(false);}
-});
+}
+$('calendar-input').addEventListener('change',e=>selectCalendar(e.target.files));
+const calendarDrop=$('calendar-drop');
+const isFileDrag=e=>Array.from(e.dataTransfer?.types||[]).includes('Files')||e.dataTransfer?.files?.length;
+calendarDrop.addEventListener('dragover',e=>{if(!isFileDrag(e))return;e.preventDefault();if(e.dataTransfer)e.dataTransfer.dropEffect=state.busy?'none':'copy';if(!state.busy&&state.task)calendarDrop.classList.add('dragging');});
+calendarDrop.addEventListener('dragleave',e=>{if(!calendarDrop.contains(e.relatedTarget))calendarDrop.classList.remove('dragging');});
+calendarDrop.addEventListener('drop',e=>{e.preventDefault();calendarDrop.classList.remove('dragging');return selectCalendar(e.dataTransfer?.files);});
 function renderReview(){
  const task=state.task;$('target-name').textContent=task.target.name;$('review-subtitle').textContent=`${task.templates.length} 份模板 · 同口径要素共享核对 · 文件名月份 ${task.month}`+(state.company?' · 公司介绍：'+state.company.name:'');
  $('count-facts').textContent=groups().length;$('count-updates').textContent=task.materials.reduce((n,m)=>n+m.operations.filter(o=>o.kind==='replace').length,0);$('count-pending').textContent=groups().filter(g=>groupFacts(g).some(f=>f.status!=='verified')).length;$('count-materials').textContent=task.materials.length;
@@ -193,7 +203,7 @@ function reviewText(task,result){
 $('generate-button').onclick=async()=>{
  if(!state.task||state.busy||!state.monthValid)return;setBusy(true);$('error-panel').hidden=true;clearDownloads();generationStatus('正在生成物料，请稍候…');$('generate-button').textContent='正在生成…';await nextPaint();
  try{
-  const {writeTask}=await import('./office-writer.js');const result=await writeTask(state.task);generationStatus(`已完成 ${result.files.length} 份物料，正在准备下载包…`);const zip=new globalThis.JSZip();for(const file of result.files)zip.file(file.name,file.bytes);zip.file('审阅清单.txt','\uFEFF'+reviewText(state.task,result));const bundle=await zip.generateAsync({type:'uint8array',compression:'DEFLATE'});
+  const {writeTask}=await import('./office-writer.js?v=20261026-drop');const result=await writeTask(state.task);generationStatus(`已完成 ${result.files.length} 份物料，正在准备下载包…`);const zip=new globalThis.JSZip();for(const file of result.files)zip.file(file.name,file.bytes);zip.file('审阅清单.txt','\uFEFF'+reviewText(state.task,result));const bundle=await zip.generateAsync({type:'uint8array',compression:'DEFLATE'});
   const issues=deliveryIssues(state.task,result),box=$('download-list');box.append(el('p','download-success',`已生成 ${result.files.length} 份物料，可下载审阅。`));const bundleLink=downloadLink(bundle,'application/zip',`${state.task.target.shortName||'产品物料'}_${state.task.month}.zip`,box);for(const file of result.files)downloadLink(file.bytes,file.mime,file.name,box);changeStep('download');
   for(const note of deliveryNotes(state.task,result))box.append(el('p','delivery-note',note));
   generationStatus((issues.length?`已生成 ${result.files.length} 份，${issues.length} 份未生成，原因见下方。`:'已生成。')+'若未自动开始下载，请点击下方下载包或单个文件。',issues.length?'warning':'success');box.scrollIntoView({block:'nearest'});

@@ -78,7 +78,7 @@ export function matchCalendarRows(calendar,targetName){
 export async function readProductCalendar({name,bytes}){
  if(!/\.xlsx$/i.test(name||''))throw new Error('产品日历请选择 XLSX 文件；可在 Excel 中另存为 XLSX。');
  if(!bytes||bytes.byteLength>30*1024*1024)throw new Error('产品日历文件为空或超过30 MB。');
- const zip=await globalThis.JSZip.loadAsync(bytes),warnings=[],result=[];
+ let zip;try{zip=await globalThis.JSZip.loadAsync(bytes);}catch(cause){throw new Error('无法读取这份 Excel，文件可能损坏、受密码保护或并非有效的 XLSX。请重新选择可正常打开的 XLSX 文件。',{cause});}const warnings=[],result=[];
  const read=async path=>{const entry=zip.file(path);if(!entry)return null;const text=await entry.async('string');if(text.length>40*1024*1024)throw new Error('产品日历表格过大，请只保留本次需要的产品。');return parseXml(text);};
  const wb=await read('xl/workbook.xml'),rels=await read('xl/_rels/workbook.xml.rels');if(!wb||!rels)throw new Error('未找到有效的 Excel 工作簿，请重新选择 XLSX 文件。');
  const date1904=['1','true'].includes(child(wb,'workbookPr')?.getAttribute('date1904')),paths=new Map();
