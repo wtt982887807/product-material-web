@@ -129,14 +129,19 @@ function appendSupplementFacts(app){
 }
 const buttonIn=(element,text)=>descendants(element).find(n=>n.tagName==='button'&&n.textContent===text);
 
-test('three current-date occurrences render one supplement card, and text preview applies only after confirmation',async()=>{
+test('five independent rows apply only the parsed row after confirmation',async()=>{
  const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();appendSupplementFacts(app);
  assert.equal(descendants(app.elements.get('facts-list')).filter(n=>n.tagName==='strong'&&n.textContent==='本次开放日').length,1);
- app.elements.get('supplement-text').value='本次开放日：2026年11月3日至2026年11月5日；产品代码：000123';
- await app.elements.get('supplement-parse').click();assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null);
+ for(const kind of ['date','performance','benchmark','code','opening'])assert.equal(app.elements.get('supplement-'+kind).value,'');
+ app.elements.get('supplement-date').value='2026年11月3日至2026年11月5日';
+ app.elements.get('supplement-code').value='000123';
+ await app.elements.get('supplement-parse-code').click();assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null);
  assert.ok(buttonIn(app.elements.get('supplement-preview'),'确认并应用补充'));
  await buttonIn(app.elements.get('supplement-preview'),'确认并应用补充').click();
  assert.equal(app.state.task.facts.find(f=>f.id==='code').value,'000123');
+ assert.ok(app.state.task.facts.filter(f=>f.key==='opening_announced_date').every(f=>f.status==='pending'));
+ await app.elements.get('supplement-parse-date').click();
+ await buttonIn(app.elements.get('supplement-preview'),'确认并应用补充').click();
  assert.ok(app.state.task.facts.filter(f=>f.key==='opening_announced_date').every(f=>f.status==='verified'));
 });
 
@@ -172,10 +177,19 @@ test('Excel preview includes both schedule bounds and the complete window rule b
  assert.equal(app.state.task.facts.find(f=>f.id==='date-c').value,'2026/9/8至2026/9/14');
 });
 
-test('editing bulk text after preview cannot apply the stale parsed values',async()=>{
+test('editing a row after preview cannot apply the stale parsed values',async()=>{
  const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();appendSupplementFacts(app);
- app.elements.get('supplement-text').value='产品代码：000123';await app.elements.get('supplement-parse').click();const oldButton=buttonIn(app.elements.get('supplement-preview'),'确认并应用补充');
- app.elements.get('supplement-text').value='产品代码：000999';await app.elements.get('supplement-text').dispatch('input');await oldButton.click();assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null);
+ app.elements.get('supplement-code').value='产品代码：000123';await app.elements.get('supplement-parse-code').click();const oldButton=buttonIn(app.elements.get('supplement-preview'),'确认并应用补充');
+ app.elements.get('supplement-code').value='产品代码：000999';await app.elements.get('supplement-code').dispatch('input');await oldButton.click();assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null);
+});
+
+test('an empty or failed row parse cannot leave an earlier preview applicable',async()=>{
+ const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();appendSupplementFacts(app);
+ for(const value of ['', 'not-a-date']){
+  app.elements.get('supplement-code').value='000123';await app.elements.get('supplement-parse-code').click();const oldButton=buttonIn(app.elements.get('supplement-preview'),'确认并应用补充');
+  app.elements.get('supplement-date').value=value;await app.elements.get('supplement-parse-date').click();await oldButton.click();
+  assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null);assert.equal(app.state.supplementPreview,null);
+ }
 });
 
 test('editing an individual field invalidates its previous preview',async()=>{
