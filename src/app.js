@@ -1,6 +1,7 @@
 import {currentMonth,deliveryName,resolveProductionMonth,monthInputValue,uniqueDeliveryNames} from './naming.js?v=20261026-drop';
 
 const $=id=>document.getElementById(id);
+const supplementKinds=['date','performance','benchmark','code','opening'];
 const state={contract:null,templates:[],task:null,filter:'focus',busy:false,urls:[],month:currentMonth(),manualMonth:undefined,monthValid:true,started:new Date(),run:0,company:null,companyIsDefault:false,companyReady:false,companyPersisted:false,companyStored:false,companyWarning:'',store:null,reviewApi:null,calendar:null,calendarMatches:[],supplementPreview:null};
 const el=(tag,className,text)=>{const n=document.createElement(tag);if(className)n.className=className;if(text!==undefined)n.textContent=text;return n;};
 const readableSize=bytes=>bytes>=1048576?(bytes/1048576).toFixed(1)+' MB':Math.max(1,Math.round(bytes/1024))+' KB';
@@ -27,7 +28,7 @@ function refreshSelection(){
  $('company-input').disabled=state.busy||!state.companyReady;$('company-clear').disabled=state.busy||!state.companyReady;
  $('selection-hint').textContent=state.contract&&state.templates.length?`已选择合同和 ${state.templates.length} 份物料模板。`:'选好文件后，开始核对。';
 }
-function invalidate(){state.task=null;state.calendar=null;state.calendarMatches=[];state.supplementPreview=null;$('calendar-input').value='';$('calendar-row').replaceChildren();$('calendar-row').hidden=true;$('calendar-row-label').hidden=true;$('calendar-row-detail').replaceChildren();$('calendar-status').textContent='Excel 在本机读取。根据合同产品匹配，保留来源行供核对。';$('supplement-text').value='';$('supplement-preview').hidden=true;$('supplement-notice').hidden=true;$('review-section').hidden=true;clearDownloads();changeStep('upload');$('error-panel').hidden=true;}
+function invalidate(){state.task=null;state.calendar=null;state.calendarMatches=[];state.supplementPreview=null;$('calendar-input').value='';$('calendar-row').replaceChildren();$('calendar-row').hidden=true;$('calendar-row-label').hidden=true;$('calendar-row-detail').replaceChildren();$('calendar-status').textContent='Excel 在本机读取。根据合同产品匹配，保留来源行供核对。';for(const kind of supplementKinds)$('supplement-'+kind).value='';$('supplement-preview').hidden=true;$('supplement-notice').hidden=true;$('review-section').hidden=true;clearDownloads();changeStep('upload');$('error-panel').hidden=true;}
 function showCompany(){
  const prefix=state.company?(state.companyIsDefault?`网页内置：${state.company.name}。未上传新版时自动使用。`:`当前版本：${state.company.name}。${state.companyPersisted?'已保存在此浏览器，下次自动沿用。':'仅本次使用，尚未保存。'}`):'公司介绍暂未加载，本轮只更新产品要素。';
  $('company-status').textContent=prefix+(state.companyWarning?' '+state.companyWarning:'');$('company-clear').hidden=(!state.company||state.companyIsDefault)&&!state.companyStored;
@@ -79,13 +80,13 @@ for(const [id,kind]of [['contract-drop','contract'],['templates-drop','templates
  const box=$(id);box.addEventListener('dragover',e=>{e.preventDefault();box.classList.add('dragging');});box.addEventListener('dragleave',()=>box.classList.remove('dragging'));box.addEventListener('drop',e=>{e.preventDefault();box.classList.remove('dragging');if(kind==='company')selectCompany(e.dataTransfer.files);else selectFiles(kind,e.dataTransfer.files);});
 }
 function progress(title,detail){$('progress-panel').hidden=false;$('progress-title').textContent=title;$('progress-detail').textContent=detail;}
-function setBusy(busy){state.busy=busy;$('calendar-drop').setAttribute('aria-busy',String(busy));if(busy)$('calendar-drop').classList.remove('dragging');for(const id of ['contract-input','templates-input','company-input','company-clear','month-value','month-reset','reset-button','calendar-input','calendar-row','supplement-text','supplement-parse','supplement-text-tab','supplement-excel-tab'])$(id).disabled=busy;document.querySelectorAll('#facts-list input,#facts-list textarea,#facts-list button,#supplement-preview button').forEach(n=>n.disabled=busy);refreshSelection();}
+function setBusy(busy){state.busy=busy;$('calendar-drop').setAttribute('aria-busy',String(busy));if(busy)$('calendar-drop').classList.remove('dragging');for(const id of ['contract-input','templates-input','company-input','company-clear','month-value','month-reset','reset-button','calendar-input','calendar-row',...supplementKinds.flatMap(k=>['supplement-'+k,'supplement-parse-'+k]),'supplement-text-tab','supplement-excel-tab'])$(id).disabled=busy;document.querySelectorAll('#facts-list input,#facts-list textarea,#facts-list button,#supplement-preview button').forEach(n=>n.disabled=busy);refreshSelection();}
 $('dismiss-error').onclick=()=>$('error-panel').hidden=true;
 $('reset-button').onclick=()=>{state.run++;state.contract=null;state.templates=[];$('contract-input').value='';$('templates-input').value='';invalidate();updateMonth(true);refreshSelection();$('upload-section').hidden=false;window.scrollTo({top:0,behavior:'smooth'});};
 $('analyze-button').onclick=async()=>{
  if(state.busy||!state.companyReady)return;try{updateMonth();}catch(error){showError(error);return;}const run=++state.run;invalidate();setBusy(true);progress('正在读取合同','建立本次合同索引，保留文字出处。');await nextPaint();
  try{
-  const [{readWordContract,readWordTemplate},reviewApi]=await Promise.all([import('./word-input.js'),import('./review-engine.js?v=20261026-monthly')]);state.reviewApi=reviewApi;const {analyzeMaterials}=reviewApi;
+  const [{readWordContract,readWordTemplate},reviewApi]=await Promise.all([import('./word-input.js'),import('./review-engine.js?v=20261026-rows')]);state.reviewApi=reviewApi;const {analyzeMaterials}=reviewApi;
   const contract=await readWordContract({name:state.contract.name,bytes:new Uint8Array(await state.contract.arrayBuffer())},{onProgress:progress});
   const templates=[],inputIssues=[],seen=new Set();
   for(const [i,file]of state.templates.entries()){
@@ -119,7 +120,7 @@ function renderFact(fact){
  for(const m of state.task.materials){const fields=m.fields.filter(f=>f.factIds?.includes(fact.id));for(const field of fields){const occurrence=el('div','occurrence');occurrence.append(el('strong','',m.template.name+' · '+field.label));const before=field.before||'';const after=field.after??before;if(before!==after){const b=el('p');b.append(el('del','',before));const a=el('p');a.append(el('ins','',after));occurrence.append(b,a);}else occurrence.append(el('p','',before));details.append(occurrence);}}
  row.append(details);
  if(fact.status!=='verified'){
-  const form=el('form','supplement');const input=el('input');input.placeholder='有明确补充资料时，可在这里填写';input.setAttribute('aria-label','补充'+(fact.label||fact.key));const button=el('button','','确认补充');button.type='submit';form.append(input,button);form.onsubmit=async e=>{e.preventDefault();if(!input.value.trim())return;try{const {setSupplement}=await import('./review-engine.js?v=20261026-monthly');state.task=await setSupplement(state.task,fact.id,input.value);clearDownloads();$('error-panel').hidden=true;changeStep('review');renderReview();}catch(error){showError(error);}};row.append(form);
+  const form=el('form','supplement');const input=el('input');input.placeholder='有明确补充资料时，可在这里填写';input.setAttribute('aria-label','补充'+(fact.label||fact.key));const button=el('button','','确认补充');button.type='submit';form.append(input,button);form.onsubmit=async e=>{e.preventDefault();if(!input.value.trim())return;try{const {setSupplement}=await import('./review-engine.js?v=20261026-rows');state.task=await setSupplement(state.task,fact.id,input.value);clearDownloads();$('error-panel').hidden=true;changeStep('review');renderReview();}catch(error){showError(error);}};row.append(form);
  }
  return row;
 }
@@ -155,8 +156,14 @@ function showSupplementPreview(preview,origin={}){
 }
 function switchSupplement(mode){if(state.busy)return;for(const kind of ['text','excel']){$('supplement-'+kind+'-panel').hidden=kind!==mode;$('supplement-'+kind+'-tab').classList.toggle('selected',kind===mode);$('supplement-'+kind+'-tab').setAttribute('aria-pressed',String(kind===mode));}state.supplementPreview=null;$('supplement-preview').hidden=true;}
 $('supplement-text-tab').onclick=()=>switchSupplement('text');$('supplement-excel-tab').onclick=()=>switchSupplement('excel');
-$('supplement-text').addEventListener('input',discardSupplementPreview);
-$('supplement-parse').onclick=()=>{if(state.busy||!state.task)return;try{showSupplementPreview(state.reviewApi.previewSupplementText(state.task,$('supplement-text').value),{label:'文字补充'});}catch(error){showError(error);}};
+for(const kind of supplementKinds){
+ const input=$('supplement-'+kind);input.addEventListener('input',discardSupplementPreview);
+ $('supplement-parse-'+kind).onclick=()=>{
+  if(state.busy||!state.task)return;discardSupplementPreview();$('supplement-notice').hidden=true;
+  if(!input.value.trim()){$('error-panel').hidden=true;$('supplement-notice').textContent='本行未填写内容，核对结果保持原样。';$('supplement-notice').hidden=false;return;}
+  try{showSupplementPreview(state.reviewApi.previewSupplementField(state.task,kind,input.value),{label:({date:'本次开放日',performance:'业绩报酬',benchmark:'业绩比较基准',code:'产品代码',opening:'开放期'})[kind],note:'仅应用本行识别到的内容，其他输入行保持不动。'});}catch(error){showError(error);}
+ };
+}
 function previewCalendarRow(){
  state.supplementPreview=null;$('supplement-preview').hidden=true;const row=state.calendar?.rows.find(r=>r.id===$('calendar-row').value),box=$('calendar-row-detail');box.replaceChildren();if(!row)return;
  const source=row.source||{};box.append(el('strong','',row.productName),el('p','supplement-note',`${source.file||state.calendar.name||'产品日历'} · ${source.sheet||''} · 第 ${source.row} 行`));

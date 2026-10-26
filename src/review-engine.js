@@ -1,6 +1,6 @@
 // Local evidence rules. No network calls and no product-specific answer tables.
 import {NS,elements} from './office-xml.js';
-import {parseDateInput,formatDateLike,parsePerformanceInput,parseOpeningInput} from './supplement-parser.js?v=20261026-monthly';
+import {parseDateInput,formatDateLike,parsePerformanceInput,parseOpeningInput} from './supplement-parser.js?v=20261026-rows';
 import {monthlyWeekdayPatterns,parseMonthlyWeekdayInput,monthlyWeekdayChanges} from './monthly-weekday.js?v=20261026-monthly';
 import {getTradingDays} from './trading-calendar.js?v=20261026-openings';
 const PRODUCT_END='(?:集合资金信托计划|集合资产信托计划|集合资产管理计划|单一资产管理计划|资产管理计划|证券投资基金|信托计划)';
@@ -642,6 +642,28 @@ export function previewSupplement(task,groupId,text){
  else values[facts[0].key]=raw;
  if(!Object.keys(values).length)throw new Error('请明确填写开放规则，例如每满18个月、连续开放5个交易日。');
  return previewUpdates(task,facts,values,raw,groupId);
+}
+// The five input rows are independent: never send untouched rows through bulk parsing.
+export function previewSupplementField(task,kind,text){
+ const labels={date:'本次开放日',performance:'业绩报酬',benchmark:'业绩比较基准',code:'产品代码',opening:'开放期'};
+ if(!labels[kind])throw new Error('请选择有效的补充要素。');
+ let raw=String(text??'').normalize('NFKC').trim();if(!raw)throw new Error('请填写本行需要补充的内容。');
+ const aliases={date:'本次开放日|本次开放日期|开放日期|开放日',performance:'业绩报酬',benchmark:'业绩比较基准|业绩参考基准|业绩基准',code:'产品代码|产品编码',opening:'开放期|开放规则|开放周期'};
+ // Labels copied from another row should not be interpreted as numbers for this row.
+ for(const [other,names]of Object.entries(aliases))if(other!==kind&&new RegExp('(?:^|[;；\\n])\\s*(?:'+names+')\\s*[:：]').test(raw))throw new Error('本行只解析'+labels[kind]+'，请将其他要素分别填入对应行。');
+ let groups=getSupplementGroups(task).filter(g=>g.kind===kind&&(kind!=='date'||g.scope.event==='opening'));const notes=[];
+ if(kind==='opening'&&groups.length>1&&new Set(groups.map(g=>JSON.stringify(g.scope,Object.keys(g.scope).sort()))).size===1){
+  const atomic=groups.filter(g=>g.factIds.some(id=>task.facts.find(f=>f.id===id)?.key!=='opening'));
+  if(atomic.length){groups=atomic;notes.push('未定位到具体参数的整段开放期说明保留原文待核；本次只更新已识别的周期、天数或星期。');}
+ }
+ if(!groups.length)return{text:raw,updates:[],warnings:['模板未识别到'+labels[kind]+'对应位置，未写入。']};
+ if(groups.length>1)return{text:raw,updates:[],warnings:['该要素存在多个份额或口径，请在下方对应卡片分别填写。']};
+ raw=raw.replace(new RegExp('^(?:'+aliases[kind]+')\\s*[:：]\\s*'),'').trim();
+ if(kind==='benchmark'){
+  const m=raw.match(/^(?:(?:业绩比较基准|业绩参考基准|业绩基准)(?:为|是)?\s*)?(\d+(?:\.\d+)?\s*%?)(?:\s*(?:业绩比较基准|业绩参考基准|业绩基准))?[。.]?$/);
+  if(!m)throw new Error('请填写单个业绩比较基准，例如2.25%，不要将业绩报酬分段填入本行。');raw=m[1];
+ }
+ const preview=previewSupplement(task,groups[0].id,raw);preview.warnings.push(...notes);return preview;
 }
 export function previewSupplementText(task,text){
  const raw=String(text).trim(),groups=getSupplementGroups(task),requests=[],warnings=[];

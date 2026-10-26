@@ -40,24 +40,38 @@ export function formatDateLike(value,before,role='date',year){
 export function parsePerformanceInput(value){
  const text=clean(value),result={};
  if(/[-−－]\s*\d+(?:\.\d+)?\s*%/.test(text))throw new Error('当前补充百分比应为0至100，不能填写负数。');
- for(const m of text.matchAll(new RegExp('(R[1-9])\\s*(?:为|是|=|:)?\\s*('+pct+')','g')))result['performance_'+m[1]]=percent(m[2]);
- for(const m of text.matchAll(new RegExp('第([1-9])档\\s*(?:计提|提取|提成|收取)(?:比例)?\\s*[:：]?\\s*('+pct+')','g')))result['performance_ratio_'+m[1]]=percent(m[2]);
- const clauses=text.split(/[;；\n]/).filter(Boolean),boundaries=[];const bands=[];
- for(const clause of clauses){
-  const payout=clause.match(new RegExp('(?:计提|提取|提成|收取|按)\\s*('+pct+')'));
-  const cutoff=payout?.index??clause.length;
-  const conditions=clause.slice(0,cutoff);
-  if(!/[<>＜＞≤≥]|超过|超出|高于|区间/.test(conditions))continue;
+ const assign=(key,value)=>{if(result[key]&&result[key]!==value)throw new Error('同一业绩报酬事项给出了不同数值，请核对。');result[key]=value;};
+ const action=String.raw`(?:计提|提取|提成|收取)\s*(?:业绩报酬)?\s*的?\s*(?:比例|比率)?\s*(?:为|是|=|:|按)?\s*`;
+ for(const m of text.matchAll(new RegExp('(R[1-9])\\s*(?:为|是|=|:)?\\s*('+pct+')','gi')))assign('performance_'+m[1].toUpperCase(),percent(m[2]));
+ for(const m of text.matchAll(new RegExp('第([1-9])档\\s*'+action+'('+pct+')','g')))assign('performance_ratio_'+m[1],percent(m[2]));
+ // A line break within a condition and its payout is layout, not a new tier.
+ const joined=text.replace(new RegExp('\\n\\s*(?=(?:'+action+'|(?:按|以)\\s*)\\d)','g'),' ');
+ const clauses=joined.split(/[;；。\n]/).filter(Boolean),boundaries=[];const bands=[];
+ const namedHurdlePattern=new RegExp('(?:业绩报酬(?:计提)?基准|计提基准)\\s*(?:为|是|=|:)?\\s*('+pct+')','g');
+ const namedHurdles=[...new Set([...text.matchAll(namedHurdlePattern)].map(m=>Number(m[1].replace(/[^\d.]/g,''))))];
+ const payoutPattern=new RegExp('(?:'+action+'|(?:按|以)\\s*)('+pct+')|(?:部分|超额收益|收益)\\s*的?\\s*('+pct+')(?=\\s*(?:的?比例)?\\s*(?:作为|计提|提取|提成|收取))|('+pct+')\\s*的比例\\s*(?:计提|提取|提成|收取)','g');
+ const segments=clauses.flatMap(clause=>{const payouts=[...clause.matchAll(payoutPattern)];if(!payouts.length)return[{conditions:clause,payout:null}];let cursor=0;const pieces=payouts.map(payout=>{const conditions=clause.slice(cursor,payout.index);cursor=payout.index+payout[0].length;return{conditions,payout};});const trailing=clause.slice(cursor);if(new RegExp(pct).test(trailing))pieces.push({conditions:trailing,payout:null});return pieces;});
+ for(const {conditions,payout}of segments){
+  const isCondition=/[<>＜＞≤≥]|超过|超出|高于|大于|以上|区间/.test(conditions),namedHere=[...conditions.matchAll(namedHurdlePattern)].length>0;
+  if(!isCondition&&!namedHere){
+   if(!payout){if(/(?:比例|比率|提取|计提)\s*[:：为是]?\s*\d+(?:\.\d+)?\s*%/.test(conditions))throw new Error('有未识别的计提比例，请明确它对应的收益率区间。');continue;}
+   if(/第[1-9]档/.test(conditions))continue;
+   if(namedHurdles.length!==1)throw new Error('计提比例无法对应业绩报酬档位，请明确收益率区间或第几档。');
+  }
   const values=[...conditions.matchAll(new RegExp(pct,'g'))].map(m=>Number(m[0].replace(/[^\d.]/g,'')));
-  if(values.length===2&&/[<＜≤]|区间/.test(conditions)&&values[0]>=values[1])throw new Error('业绩报酬区间的下限必须小于上限。');
-  boundaries.push(...values);if(payout)bands.push({clause:conditions,values,ratio:percent(payout[1])});
+  const namedSingle=payout&&!values.length&&namedHurdles.length===1&&!/R[1-9]/i.test(conditions);
+  if(namedSingle)values.push(namedHurdles[0]);
+  const upperBound=/[<＜≤]|不超过|未超过|不高于|不大于|低于|小于|区间/.test(conditions);
+  if(values.length>2||values.length>1&&!upperBound)throw new Error('有多个百分比无法区分基准和计提比例，请明确收益率区间与提取比例。');
+  if(values.length===2&&upperBound&&values[0]>=values[1])throw new Error('业绩报酬区间的下限必须小于上限。');
+  boundaries.push(...values);if(payout)bands.push({clause:conditions,values,namedSingle:namedSingle||namedHere,ratio:percent(payout[1]||payout[2]||payout[3])});
  }
  const thresholds=[...new Set(boundaries)].sort((a,b)=>a-b);
  thresholds.forEach((x,i)=>{const key='performance_R'+(i+1);if(result[key]&&result[key]!==`${x}%`)throw new Error('业绩报酬基准标注与区间不一致，请核对。');result[key]=`${x}%`;});
  for(const band of bands){
-  let tier=null;const high=thresholds.at(-1);
+  let tier=null;
   if(band.values.length>=2)tier=thresholds.indexOf(Math.min(...band.values))+1;
-  else if(band.values.length===1&&/[>＞]|超过|超出|高于/.test(band.clause))tier=thresholds.indexOf(band.values[0])+1;
+  else if(band.values.length===1&&(/[>＞]|(?<!不|未)(?:超过|超出|高于|大于)|以上/.test(band.clause)||band.namedSingle))tier=thresholds.indexOf(band.values[0])+1;
   else if(/R2/.test(band.clause)&&/[>＞]/.test(band.clause))tier=2;
   else if(/R1/.test(band.clause))tier=1;
   if(tier){const key='performance_ratio_'+tier;if(result[key]&&result[key]!==band.ratio)throw new Error('同一档业绩报酬给出了不同计提比例。');result[key]=band.ratio;}
