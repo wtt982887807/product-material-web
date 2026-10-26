@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="根据合同更新产品要素，保留模板原话术与格式。在浏览器本地读取并导出 Word 和 PowerPoint。">
-  <title>产品要素工作台</title><link rel="stylesheet" href="styles.css?v=20261026">
+  <title>产品要素工作台</title><link rel="stylesheet" href="styles.css?v=20261026-drop">
 </head>
 <body>
   <header class="topbar"><a class="brand" href="./" aria-label="产品要素工作台首页"><span class="brand-mark">P</span><span>产品要素工作台<small>PRODUCT MATERIALS</small></span></a><div class="top-meta"><span class="local-dot"></span>文件在本机处理<a href="https://github.com/wtt982887807/product-material-web" target="_blank" rel="noopener">使用说明 ↗</a></div></header>
@@ -30,7 +30,7 @@
       <section class="supplement-panel" aria-labelledby="supplement-heading">
         <div class="supplement-panel-head"><div><h3 id="supplement-heading">补充本次资料</h3><p>同一要素只填一次，同步到相关物料。先预览识别结果，再应用。</p></div><div class="supplement-tabs" role="group" aria-label="补充方式"><button id="supplement-text-tab" class="selected" type="button">文字输入</button><button id="supplement-excel-tab" type="button">上传 Excel</button></div></div>
         <div id="supplement-text-panel"><label for="supplement-text">开放日期、业绩报酬、业绩比较基准、产品代码或开放期</label><textarea id="supplement-text" rows="4" placeholder="本次开放日：2026年11月23日至2026年11月27日&#10;业绩报酬：2.0%＜年化收益率≤3.0%，计提20%；年化收益率＞3.0%，计提40%&#10;业绩比较基准：2.25%&#10;产品代码：000123；开放期：每满18个月，开放5个交易日"></textarea><button id="supplement-parse" class="secondary-button" type="button">解析文字</button></div>
-        <div id="supplement-excel-panel" hidden><label for="calendar-input">选择产品日历 Excel（XLSX）</label><input id="calendar-input" type="file" accept=".xlsx"><p id="calendar-status" class="supplement-note" role="status">Excel 在本机读取。根据合同产品匹配，保留来源行供核对。</p><label for="calendar-row" id="calendar-row-label" hidden>选择本次补充所用的产品行</label><select id="calendar-row" hidden></select><div id="calendar-row-detail" class="calendar-detail"></div></div>
+        <div id="supplement-excel-panel" hidden><div class="calendar-drop" id="calendar-drop" role="region" aria-label="拖入产品日历 Excel"><strong>将产品日历 Excel 拖到这里</strong><p id="calendar-drop-hint">每次一份 XLSX，30 MB 以内；也可以点击选择。</p><label class="file-button secondary" for="calendar-input">选择产品日历 Excel（XLSX）</label><input id="calendar-input" type="file" accept=".xlsx" aria-describedby="calendar-drop-hint"></div><p id="calendar-status" class="supplement-note" role="status">Excel 在本机读取。根据合同产品匹配，保留来源行供核对。</p><label for="calendar-row" id="calendar-row-label" hidden>选择本次补充所用的产品行</label><select id="calendar-row" hidden></select><div id="calendar-row-detail" class="calendar-detail"></div></div>
         <div id="supplement-preview" class="supplement-preview" hidden></div><p id="supplement-notice" class="supplement-note" role="status" hidden></p>
       </section>
       <div class="review-layout"><section class="facts-panel"><div class="panel-header"><h3>要素核对</h3><div class="filters" role="group" aria-label="筛选要素"><button class="selected" data-filter="focus">需关注</button><button data-filter="all">全部</button><button data-filter="pending">待核</button></div></div><div id="facts-list"></div></section><aside class="delivery-panel"><h3>本次输出</h3><div id="delivery-list"></div><p class="delivery-note">黄色表示原值仍需确认，不影响生成审阅稿。下载后可在 Word 中查看修订与批注。</p><button class="primary-button full" id="generate-button">生成并下载物料</button><p id="generation-status" class="generation-status" role="status" aria-live="polite" hidden></p><div id="download-list" aria-live="polite"></div></aside></div>
@@ -38,6 +38,6 @@
     <section class="how-it-works"><div><span>01</span><strong>同一事实，统一核对</strong><p>保留各模板自己的句式与位置。</p></div><div><span>02</span><strong>缺项保留，局部标黄</strong><p>不把旧值删成整段“待补充”。</p></div><div><span>03</span><strong>产品更新，月份自动</strong><p>制作月份只用于文件命名。</p></div></section>
   </main>
   <footer><span>产品要素工作台 · 本地文件处理</span><span>合同和模板在本机处理；网页自带公司介绍，可上传新版覆盖。</span></footer>
-  <script src="vendor/jszip.min.js"></script><script src="vendor/docToText.js"></script><script type="module" src="src/bootstrap.js?v=20261026"></script>
+  <script src="vendor/jszip.min.js"></script><script src="vendor/docToText.js"></script><script type="module" src="src/bootstrap.js?v=20261026-drop"></script>
 </body>
 </html>
