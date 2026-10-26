@@ -87,7 +87,7 @@ $('reset-button').onclick=()=>{state.run++;state.contract=null;state.templates=[
 $('analyze-button').onclick=async()=>{
  if(state.busy||!state.companyReady)return;try{updateMonth();}catch(error){showError(error);return;}const run=++state.run;invalidate();setBusy(true);progress('正在读取合同','建立本次合同索引，保留文字出处。');await nextPaint();
  try{
-  const [{readWordContract,readWordTemplate},reviewApi]=await Promise.all([import('./word-input.js'),import('./review-engine.js?v=20261026-contract-apply')]);state.reviewApi=reviewApi;const {analyzeMaterials}=reviewApi;
+  const [{readWordContract,readWordTemplate},reviewApi]=await Promise.all([import('./word-input.js'),import('./review-engine.js?v=20261026-opening-strategy')]);state.reviewApi=reviewApi;const {analyzeMaterials}=reviewApi;
   const contract=await readWordContract({name:state.contract.name,bytes:new Uint8Array(await state.contract.arrayBuffer())},{onProgress:progress});
   const templates=[],inputIssues=[],seen=new Set();
   for(const [i,file]of state.templates.entries()){
@@ -121,7 +121,7 @@ function renderFact(fact){
  for(const m of state.task.materials){const fields=m.fields.filter(f=>f.factIds?.includes(fact.id));for(const field of fields){const occurrence=el('div','occurrence');occurrence.append(el('strong','',m.template.name+' · '+field.label));const before=field.before||'';const after=field.after??before;if(before!==after){const b=el('p');b.append(el('del','',before));const a=el('p');a.append(el('ins','',after));occurrence.append(b,a);}else occurrence.append(el('p','',before));details.append(occurrence);}}
  row.append(details);
  if(fact.status!=='verified'){
-  const form=el('form','supplement');const input=el('input');input.placeholder='有明确补充资料时，可在这里填写';input.setAttribute('aria-label','补充'+(fact.label||fact.key));const button=el('button','','确认补充');button.type='submit';form.append(input,button);form.onsubmit=async e=>{e.preventDefault();if(!input.value.trim())return;try{const {setSupplement}=await import('./review-engine.js?v=20261026-contract-apply');state.task=await setSupplement(state.task,fact.id,input.value);clearDownloads();$('error-panel').hidden=true;changeStep('review');renderReview();}catch(error){showError(error);}};row.append(form);
+  const form=el('form','supplement');const input=el('input');input.placeholder='有明确补充资料时，可在这里填写';input.setAttribute('aria-label','补充'+(fact.label||fact.key));const button=el('button','','确认补充');button.type='submit';form.append(input,button);form.onsubmit=async e=>{e.preventDefault();if(!input.value.trim())return;try{const {setSupplement}=await import('./review-engine.js?v=20261026-opening-strategy');state.task=await setSupplement(state.task,fact.id,input.value);clearDownloads();$('error-panel').hidden=true;changeStep('review');renderReview();}catch(error){showError(error);}};row.append(form);
  }
  return row;
 }
@@ -152,11 +152,14 @@ function sectionSignature(review){
 }
 function sectionConfirmed(review){return !!review&&state.task.sectionAcknowledgements?.[review.id]===sectionSignature(review);}
 function sectionPending(review){return !!review?.needsReview&&!sectionConfirmed(review);}
+function sectionCanAdopt(review){return ['investment_ratios','investment_strategy','opening_fixed_monthdays'].includes(review?.key)&&!!(review.replacement?.lines?.length||review.materials?.some(m=>m.replacement?.lines?.length));}
+function sectionAction(review){return review.key==='investment_strategy'?(review.materials?.some(m=>m.replacement?.removedTitles?.length)?'采用合同策略标题':'补齐策略标题'):review.key==='opening_fixed_monthdays'?'采用合同开放期':'采用合同投资比例';}
+function sectionAdoptedText(review){return review?.key==='investment_strategy'?'已采用合同策略标题':review?.key==='opening_fixed_monthdays'?'已采用合同开放期规则':'已采用完整合同投资比例';}
 const sectionStatus={same:'已对应',local:'数值差异',structure:'口径或条件不同',missing:'未在此物料体现',uncertain:'需核对',summary:'摘要表达，需核对'};
 function renderSectionReview(row,review){
  const confirmed=sectionConfirmed(review),adopted=state.task.sectionOverrides?.[review.id],box=el('div','section-review'+(sectionPending(review)?' needs-review':''));
- box.append(el('p','section-review-summary',adopted?'已采用完整合同投资比例，'+review.materials.map(m=>`已对应 ${m.matched}/${m.total} 项`).filter((s,i,a)=>a.indexOf(s)===i).join('；')+'。':review.summary));
- box.append(el('p','fact-reason',adopted?'完整条目和补充说明已更新至以下物料；其他要素保持当前结果。':confirmed?'已核对差异，保留当前表述':review.needsReview?'请逐项核对未体现或口径不同的内容；模板可能采用摘要表述，未自动整段替换。':'依据已完整列出；继续沿用现有的局部修改方式。'));
+ box.append(el('p','section-review-summary',adopted?sectionAdoptedText(review)+'，'+review.materials.map(m=>`已对应 ${m.matched}/${m.total} 项`).filter((s,i,a)=>a.indexOf(s)===i).join('；')+'。':review.summary));
+ box.append(el('p','fact-reason',adopted?'已更新至以下物料；其他要素保持当前结果。':confirmed?'已核对差异，保留当前表述':review.preferCompleteEvidence?'展开下方完整合同依据，按整节核对；不会把合同全文重复填入各个旧段落。':review.needsReview?(review.key==='investment_strategy'?'可预览补齐缺失标题，确认后写入物料；只使用策略小标题。':review.key==='opening_fixed_monthdays'?'当前是月内固定多日期规则。请核对日期、顺延口径和附加条件；可预览采用合同完整规则。':'请逐项核对未体现或口径不同的内容；模板可能采用摘要表述，未自动整段替换。'):'依据已完整列出；继续沿用现有的局部修改方式。'));
  const compare=el('details');compare.append(el('summary','','逐项查看合同与当前物料'));
  for(const material of review.materials||[]){
   compare.append(el('p','section-material',material.name+` · 已对应 ${material.matched}/${material.total} 项`));
@@ -167,18 +170,18 @@ function renderSectionReview(row,review){
    if(item.reason)entry.append(el('p','fact-reason',item.reason));compare.append(entry);
   }
  }
- box.append(compare);
+ if(!review.preferCompleteEvidence)box.append(compare);
  for(const note of review.notes||[]) {const detail=el('details');detail.append(el('summary','','条件性说明 · '+note.title),el('blockquote','section-evidence',note.contractText));box.append(detail);}
  if(adopted){
-  const undo=el('button','text-button','撤销采用合同内容');undo.type='button';undo.onclick=()=>{if(state.busy)return;try{state.task=state.reviewApi.undoContractSection(state.task,review.id);reviewEdited('已撤销整段采用，恢复原有局部修改；其他补充保持不变。');}catch(error){showError(error);}};box.append(el('p','fact-reason','已采用合同完整投资比例，Word 保留本轮审阅修订。'),undo);
- }else if(review.key==='investment_ratios'&&review.replacement&&review.needsReview){
-  const previewButton=el('button','','预览采用合同投资比例'),previewBox=el('div','section-adoption-preview');previewButton.type='button';previewBox.hidden=true;
+  const undo=el('button','text-button','撤销采用合同内容');undo.type='button';undo.onclick=()=>{if(state.busy)return;try{state.task=state.reviewApi.undoContractSection(state.task,review.id);reviewEdited('已撤销整段采用，恢复原有局部修改；其他补充保持不变。');}catch(error){showError(error);}};box.append(el('p','fact-reason',sectionAdoptedText(review)+'，Word 保留本轮审阅修订。'),undo);
+ }else if(sectionCanAdopt(review)&&review.needsReview){
+  const action=sectionAction(review),previewButton=el('button','','预览'+action),previewBox=el('div','section-adoption-preview');previewButton.type='button';previewBox.hidden=true;
   previewButton.onclick=()=>{if(state.busy)return;try{
    const preview=state.reviewApi.previewContractSection(state.task,review.factIds);previewBox.replaceChildren();previewBox.hidden=false;
-   previewBox.append(el('p','supplement-note','确认后仅更新以下物料的投资比例。其他要素保持当前结果；Word 使用审阅修订。'));
-   for(const entry of preview.entries){previewBox.append(el('strong','',entry.name),el('p','','当前：'),el('blockquote','section-evidence',entry.before),el('p','','拟采用合同内容：'),el('blockquote','section-evidence',entry.after));}
-   const apply=el('button','primary-button','确认采用合同投资比例'),cancel=el('button','text-button','取消');apply.type=cancel.type='button';
-   apply.onclick=()=>{if(state.busy)return;try{state.task=state.reviewApi.applyContractSection(state.task,preview);reviewEdited('已采用完整合同投资比例，并同步相关物料。可在投资比例卡片撤销。');}catch(error){showError(error);}};cancel.onclick=()=>{previewBox.hidden=true;previewBox.replaceChildren();};previewBox.append(apply,cancel);
+   previewBox.append(el('p','supplement-note','确认后仅更新以下物料的'+review.label+'。其他要素保持当前结果；Word 使用审阅修订。'));
+   for(const entry of preview.entries){previewBox.append(el('strong','',entry.name),el('p','','当前：'),el('blockquote','section-evidence',entry.before),el('p','','拟采用合同内容：'),el('blockquote','section-evidence',entry.after));for(const warning of entry.warnings||[])previewBox.append(el('p','supplement-warning',warning));}
+   const apply=el('button','primary-button','确认'+action),cancel=el('button','text-button','取消');apply.type=cancel.type='button';
+   apply.onclick=()=>{if(state.busy)return;try{state.task=state.reviewApi.applyContractSection(state.task,preview);reviewEdited(sectionAdoptedText(review)+'，并同步相关物料。可在本卡片撤销。');}catch(error){showError(error);}};cancel.onclick=()=>{previewBox.hidden=true;previewBox.replaceChildren();};previewBox.append(apply,cancel);
   }catch(error){showError(error);}};box.append(previewButton,previewBox);
  }
  if(review.needsReview){
@@ -200,14 +203,14 @@ function supplementForm(group,label){
 function renderGroup(group,section=sectionReview(group)){
  const fs=groupFacts(group),pending=fs.some(f=>f.status!=='verified'),confirmed=fs.some(isConfirmed),changed=fs.some(factChanged),adopted=fs.some(f=>f.sectionOverrideId),noFee=fs.some(f=>f.key==='performance_policy'&&f.policyMode==='none'&&f.status==='verified'),status=pending||sectionPending(section)?'pending':confirmed||sectionConfirmed(section)?'confirmed':changed?'changed':'verified';
  const label=scopedGroupLabel(group),row=el('article','fact-row');row.dataset.groupId=group.id;const head=el('div','fact-heading');head.append(el('strong','',label),el('span','badge '+status,({pending:'保留待核',confirmed:'已确认无误',changed:'已修改',verified:'原样保留'})[status]));const count=new Set(fs.flatMap(f=>(f.occurrences||[]).map(o=>o.materialId+'|'+o.paragraphId))).size;head.append(el('small','',`关联 ${count} 处`));row.append(head);
- const values=[...new Set(fs.filter(f=>f.value!==null&&f.value!==undefined).map(f=>fs.length>1||group.kind==='opening'?readableFact(f):String(f.value)))];row.append(el('p','fact-value',adopted?'已采用合同完整投资比例':confirmed?(values.length?values.join('\n')+'\n其余原值已确认无误':'已确认保留各模板原值'):values.length?values.join('\n'):'保留各模板原值'));
- const reasons=[...new Set(fs.map(f=>f.reason).filter(Boolean))];for(const reason of reasons)row.append(el('p','fact-reason',reason));
+ const values=[...new Set(fs.filter(f=>f.value!==null&&f.value!==undefined).map(f=>fs.length>1||group.kind==='opening'?readableFact(f):String(f.value)))];row.append(el('p','fact-value',adopted?sectionAdoptedText(section):confirmed?(values.length?values.join('\n')+'\n其余原值已确认无误':'已确认保留各模板原值'):section?.preferCompleteEvidence?'建议按完整合同条款核对':values.length?values.join('\n'):'保留各模板原值'));
+ const reasons=[...new Set(fs.map(f=>f.reason).filter(Boolean))];if(!section?.preferCompleteEvidence)for(const reason of reasons)row.append(el('p','fact-reason',reason));
  if(section)renderSectionReview(row,section);
  const details=el('details');details.append(el('summary','',section?'查看完整合同依据与物料位置':'查看依据与物料位置'));
- for(const evidence of section?.evidence||[]){details.append(el('p','',`完整合同依据 · 共 ${evidence.itemCount} 项`+(evidence.noteCount?`＋${evidence.noteCount} 段补充说明`:'')+(evidence.duplicateCount>0?` · 合同中 ${evidence.duplicateCount+1} 处内容一致，已合并展示`:'')),el('blockquote','section-evidence',evidence.quote));}
+ for(const evidence of section?.evidence||[]){const label=`完整合同依据 · 共 ${evidence.itemCount} 项`+(evidence.noteCount?`＋${evidence.noteCount} 段补充说明`:'')+(evidence.duplicateCount>0?` · 合同中 ${evidence.duplicateCount+1} 处内容一致，已合并展示`:'');if(evidence.variantRole==='other_version'){const alternate=el('details');alternate.append(el('summary','','其他版本依据 · 共 '+evidence.itemCount+' 项'),el('p','',label),el('blockquote','section-evidence',evidence.quote));details.append(alternate);}else details.append(el('p','',label),el('blockquote','section-evidence',evidence.quote));}
  const seenEvidence=new Set();for(const f of fs)for(const e of(f.evidence||[])){if(section?.evidence?.length&&sourceTitle(e)==='合同依据')continue;const k=e.blockId+'|'+e.quote;if(seenEvidence.has(k))continue;seenEvidence.add(k);details.append(el('p','',sourceTitle(e)),el('blockquote','',e.quote||''));}
  const factIds=new Set(group.factIds);for(const m of state.task.materials)for(const field of m.fields.filter(f=>f.factIds?.some(id=>factIds.has(id)))){const occurrence=el('div','occurrence');occurrence.append(el('strong','',m.template.name+' · '+field.label));if(noFee){occurrence.append(el('p','',field.after||'已移除旧计提说明；采用合同不提取业绩报酬的结论。'));}else if(field.before!==field.after){const b=el('p'),a=el('p');b.append(el('del','',field.before));a.append(el('ins','',field.after??field.before));occurrence.append(b,a);}else occurrence.append(el('p','',field.before));details.append(occurrence);}row.append(details);
- if(group.members?.length>1&&pending){
+ if(!adopted&&!(sectionCanAdopt(section)&&section?.needsReview)&&!section?.preferCompleteEvidence&&group.members?.length>1&&pending){
   const edits=el('details');edits.append(el('summary','','分别补充原文'),el('p','supplement-note','各处原话术分别保留。补充只更新所选原文，不覆盖其他段落。'));
   for(const [i,member]of group.members.entries()){
    if(!groupFacts(member).some(f=>f.status!=='verified'))continue;
@@ -218,7 +221,7 @@ function renderGroup(group,section=sectionReview(group)){
    edits.append(supplementForm(member,label+' · 原文 '+(i+1)));
   }
   row.append(edits);
- }else if(!group.members&&(pending||['date','performance','benchmark','code','opening'].includes(group.kind)))row.append(supplementForm(group,label));
+ }else if(!adopted&&!(sectionCanAdopt(section)&&section?.needsReview)&&!section?.preferCompleteEvidence&&!group.members&&(pending||['date','performance','benchmark','code','opening'].includes(group.kind)))row.append(supplementForm(group,label));
  if(pending||confirmed){const actions=el('div','fact-actions'),confirm=el('button','text-button',confirmed&&!pending?'撤销确认':'确认无误');confirm.type='button';confirm.setAttribute('aria-label',(confirmed&&!pending?'撤销确认':'确认无误')+'：'+label);confirm.onclick=()=>{if(state.busy)return;try{const undo=confirmed&&!pending;state.task=state.reviewApi.confirmFacts(state.task,group.factIds,!undo);reviewEdited(undo?'已撤销确认，对应原值恢复待核标记。':'已确认原值无误。PPT 和海报不再添加对应待核标黄或批注，Word 已有审阅修订继续保留。');}catch(error){showError(error);}};actions.append(confirm,el('span','','确认原值；保留 Word 本轮修订'));row.append(actions);}
  return row;
 }
@@ -275,7 +278,7 @@ async function selectCalendar(files){
  clearCalendarImport();$('supplement-notice').hidden=true;$('error-panel').hidden=true;$('calendar-status').textContent='此文件未导入，已有补充与核对结果保留。';
  if(list.length!==1){showError(new Error('每次请拖入或选择一份 XLSX 产品日历。'));return;}
  const file=list[0];if(!/\.xlsx$/i.test(file.name)||file.size>30*1024*1024){showError(new Error('请选择30 MB以内的 XLSX 产品日历。'));return;}
- setBusy(true);$('calendar-status').textContent='正在本机读取产品日历…';await nextPaint();try{const {readProductCalendar,matchCalendarRows,calendarSupplementText,calendarOpeningRange}=await import('./calendar-import.js?v=20261026-contract-apply');state.calendarSupplementText=calendarSupplementText;state.calendarOpeningRange=calendarOpeningRange;const calendar=await readProductCalendar({name:file.name,bytes:new Uint8Array(await file.arrayBuffer())});state.calendar=calendar;const matches=matchCalendarRows(calendar,state.task.target.name);state.calendarMatches=matches.map(r=>r.id);const select=$('calendar-row');select.replaceChildren();const blank=el('option','','请选择产品行');blank.value='';select.append(blank);for(const row of [...matches,...calendar.rows.filter(r=>!state.calendarMatches.includes(r.id))]){const option=el('option','',(state.calendarMatches.includes(row.id)?'匹配产品 · ':'')+row.productName+(row.productCode?' · '+row.productCode:'')+' · 第'+row.source.row+'行');option.value=row.id;select.append(option);}select.hidden=false;$('calendar-row-label').hidden=false;$('calendar-row-detail').replaceChildren();$('calendar-status').textContent=`已读取 ${calendar.rows.length} 条产品记录。`+(matches.length===1?'已定位到合同产品，请核对解析结果。':matches.length>1?'同一产品有多条记录，请选择本次所用行。':'未找到合同产品的对应行，可手动选择并核对，或使用文字补充。')+(calendar.warnings?.length?' '+calendar.warnings.join('；'):'');select.value=matches.length===1?matches[0].id:'';if(select.value)previewCalendarRow();}
+ setBusy(true);$('calendar-status').textContent='正在本机读取产品日历…';await nextPaint();try{const {readProductCalendar,matchCalendarRows,calendarSupplementText,calendarOpeningRange}=await import('./calendar-import.js?v=20261026-opening-strategy');state.calendarSupplementText=calendarSupplementText;state.calendarOpeningRange=calendarOpeningRange;const calendar=await readProductCalendar({name:file.name,bytes:new Uint8Array(await file.arrayBuffer())});state.calendar=calendar;const matches=matchCalendarRows(calendar,state.task.target.name);state.calendarMatches=matches.map(r=>r.id);const select=$('calendar-row');select.replaceChildren();const blank=el('option','','请选择产品行');blank.value='';select.append(blank);for(const row of [...matches,...calendar.rows.filter(r=>!state.calendarMatches.includes(r.id))]){const option=el('option','',(state.calendarMatches.includes(row.id)?'匹配产品 · ':'')+row.productName+(row.productCode?' · '+row.productCode:'')+' · 第'+row.source.row+'行');option.value=row.id;select.append(option);}select.hidden=false;$('calendar-row-label').hidden=false;$('calendar-row-detail').replaceChildren();$('calendar-status').textContent=`已读取 ${calendar.rows.length} 条产品记录。`+(matches.length===1?'已定位到合同产品，请核对解析结果。':matches.length>1?'同一产品有多条记录，请选择本次所用行。':'未找到合同产品的对应行，可手动选择并核对，或使用文字补充。')+(calendar.warnings?.length?' '+calendar.warnings.join('；'):'');select.value=matches.length===1?matches[0].id:'';if(select.value)previewCalendarRow();}
  catch(error){$('calendar-status').textContent='此文件未导入，已有补充与核对结果保留。';showError(error);}finally{$('calendar-input').value='';setBusy(false);}
 }
 $('calendar-input').addEventListener('change',e=>selectCalendar(e.target.files));
@@ -311,7 +314,7 @@ function reviewText(task,result){
 $('generate-button').onclick=async()=>{
  if(!state.task||state.busy||!state.monthValid)return;setBusy(true);$('error-panel').hidden=true;clearDownloads();generationStatus('正在生成物料，请稍候…');$('generate-button').textContent='正在生成…';await nextPaint();
  try{
-  const {writeTask}=await import('./office-writer.js?v=20261026-contract-apply');const result=await writeTask(state.task);generationStatus(`已完成 ${result.files.length} 份物料，正在准备下载包…`);const zip=new globalThis.JSZip();for(const file of result.files)zip.file(file.name,file.bytes);zip.file('审阅清单.txt','\uFEFF'+reviewText(state.task,result));const bundle=await zip.generateAsync({type:'uint8array',compression:'DEFLATE'});
+  const {writeTask}=await import('./office-writer.js?v=20261026-opening-strategy');const result=await writeTask(state.task);generationStatus(`已完成 ${result.files.length} 份物料，正在准备下载包…`);const zip=new globalThis.JSZip();for(const file of result.files)zip.file(file.name,file.bytes);zip.file('审阅清单.txt','\uFEFF'+reviewText(state.task,result));const bundle=await zip.generateAsync({type:'uint8array',compression:'DEFLATE'});
   const issues=deliveryIssues(state.task,result),box=$('download-list');box.append(el('p','download-success',`已生成 ${result.files.length} 份物料，可下载审阅。`));const bundleLink=downloadLink(bundle,'application/zip',`${state.task.target.shortName||'产品物料'}_${state.task.month}.zip`,box);for(const file of result.files)downloadLink(file.bytes,file.mime,file.name,box);changeStep('download');
   for(const note of deliveryNotes(state.task,result))box.append(el('p','delivery-note',note));
   generationStatus((issues.length?`已生成 ${result.files.length} 份，${issues.length} 份未生成，原因见下方。`:'已生成。')+'若未自动开始下载，请点击下方下载包或单个文件。',issues.length?'warning':'success');box.scrollIntoView({block:'nearest'});

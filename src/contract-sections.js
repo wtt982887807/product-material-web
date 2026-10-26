@@ -26,12 +26,14 @@ function heading(text){
  }
  return null;
 }
+const referenceHeading=text=>/^(?:底层基金|底层产品|标的基金|标的产品|投资标的|产品举例|示例产品|历史产品|同策略产品|其他产品)$/.test(text)||/^(?:底层|标的基金|标的产品|投资标的|产品举例|示例产品|历史产品|同策略产品|其他产品)[^。;；:：,，%％]{0,70}(?:概况|介绍|基本信息|产品要素|投资要素|投资策略|投资情况|情况|说明)$/.test(text);
 function boundary(text,current){
  if(heading(text))return true;
  const n=numbering(text);
+ if(n.text.length<=140&&!/[。;；%％]/.test(n.text)&&(/^(?:适用于)?[A-Z]类(?:份额)?$/.test(compact(n.text))||/^(?:适用于)?渠道\s*[:：]/.test(n.text)||referenceHeading(n.text)))return true;
  if(/^(?:附件|附录|第[一二三四五六七八九十百\d]+[章节])/.test(n.text))return true;
  if(n.rank&&n.rank<=current.rank&&n.text.length<70&&!/[。;；:%％]/.test(n.text))return true;
- return /^(?:风险揭示|收益分配|资产估值|费用与税收|合同的变更|合同终止|特别约定|投资政策|投资经理|估值原则)(?:[:：])?$/.test(n.text);
+ return /^(?:风险揭示|收益分配|资产估值|费用与税收|合同的变更|合同终止|特别约定|投资政策|投资经理|估值原则|关联交易|建仓期)(?:[:：])?$/.test(n.text);
 }
 const noteLine=text=>/^(?:本(?:集合|信托)?计划|本产品|上述|以上|前述|注[:：]?|说明|托管人|管理人)/.test(clean(text))&&/(?:穿透|合并|计算|监控|监管|上述比例|前述比例|运作规定|投资比例)/.test(text);
 function sectionItems(lines){
@@ -53,11 +55,25 @@ function chapters(contract){
  const signature=JSON.stringify((contract.blocks||[]).map(b=>[b.id,b.text]));
  if(CACHE.get(contract)?.signature===signature)return CACHE.get(contract).sections;
  const lines=(contract.blocks||[]).flatMap(b=>raw(b.text).split(/\r?\n/).map(text=>({...b,text:text.trim()}))).filter(b=>b.text);
- const found=[];
+ const found=[];let inAttachment=false,contexts=[];
  for(let i=0;i<lines.length;i++){
-  const h=heading(lines[i].text);if(!h)continue;
+  if(/^(?:附件|附表)(?:[一二三四五六七八九十\d\s：:]|$)/.test(lines[i].text))inAttachment=true;
+  const n=numbering(lines[i].text);let h=heading(lines[i].text);
+  const titleLike=n.text.length<=140&&!/[。;；%％]/.test(n.text);
+  // Unnumbered element headings inherit an evidenced parent scope. A numbered
+  // peer ends the previous parent; asset-class words inside body prose do not.
+  if(n.rank&&titleLike)contexts=contexts.filter(c=>c.rank?c.rank<n.rank:!(c.excluded&&!h));
+  if(titleLike&&/^(?:本集合计划|本信托计划|本计划|本产品).*(?:概况|介绍|基本信息|投资安排|产品要素)$/.test(n.text))contexts=contexts.filter(c=>!c.excluded);
+  if(!h&&titleLike){
+   const share=compact(n.text).match(/^(?:适用于)?([A-Z])类(?:份额)?$/)?.[1],channel=clean(n.text).match(/^(?:适用于)?渠道\s*[:：]\s*([^,，。;；]{1,30})$/)?.[1]?.trim();
+   if(share){contexts=contexts.filter(c=>!c.scope?.share);contexts.push({rank:n.rank,scope:{share}});}
+   if(channel){contexts=contexts.filter(c=>!c.scope?.channel);contexts.push({rank:n.rank,scope:{channel}});}
+   if(referenceHeading(n.text))contexts.push({rank:n.rank,excluded:true});
+  }
+  if(!h||contexts.some(c=>c.excluded))continue;
+  h={...h,scope:{share:'',channel:'',...Object.assign({},...contexts.map(c=>c.scope||{})),...Object.fromEntries(Object.entries(h.scope).filter(([,v])=>v))}};
   let end=i+1;while(end<lines.length&&!boundary(lines[end].text,h)){
-   if(/^[一二三四五六七八九十百]+$/.test(lines[end].text)&&heading(lines[end+1]?.text||''))break;
+   if(/^[一二三四五六七八九十百]+$/.test(lines[end].text)&&boundary(lines[end+1]?.text||'',h))break;
    end++;
   }
   const content=[...(h.body?[{...lines[i],text:h.body}]:[]),...lines.slice(i+1,end)];
@@ -68,7 +84,7 @@ function chapters(contract){
   const same=found.find(s=>s.signature===signature);
   const ids=unique([lines[i].id,...content.map(l=>l.id)]);
   if(same){same.evidence.blockIds=unique([...same.evidence.blockIds,...ids]);same.evidence.duplicateCount++;}
-  else found.push({...h,signature,content,...parsed,evidence:{blockId:lines[i].id,blockIds:ids,quote,itemCount:parsed.items.length,noteCount:parsed.notes.length,duplicateCount:0}});
+  else found.push({...h,signature,content,isAttachment:inAttachment,...parsed,evidence:{blockId:lines[i].id,blockIds:ids,quote,itemCount:parsed.items.length,noteCount:parsed.notes.length,duplicateCount:0}});
   i=end-1;
  }
  CACHE.set(contract,{signature,sections:found});return found;
@@ -218,6 +234,36 @@ function strategyRows(context,titles){
  return {items,extra,matched:context.items.filter(i=>keys.has(strategyName(i.title))).length,total:context.items.length};
 }
 
+function strategyTitleReplacement(context,source){
+ if(context.ambiguous||context.conflict||!context.items.length)return undefined;
+ const titles=shortStrategyTitles(source);if(!titles)return undefined;
+ const known=new Set(context.items.map(i=>strategyName(i.title))),removedTitles=unique(titles.filter(t=>!known.has(t.key)).map(t=>t.title));
+ const original=String(source),tokens=[];let start=0,separator='';
+ for(const m of original.matchAll(/[\r\n;；,，]+\s*|(?<=策略)、\s*/g)){
+  const text=original.slice(start,m.index);if(text.trim())tokens.push({text,key:strategyName(text),separator});
+  separator=m[0];start=m.index+m[0].length;
+ }
+ const last=original.slice(start);if(last.trim())tokens.push({text:last,key:strategyName(last),separator});
+ const trailing=last.trim()?'':separator;
+ const nodes=tokens.filter(t=>known.has(t.key)),kept=new Set(nodes.map(n=>n.key)),addedTitles=[];
+ const usualSeparator=tokens.find(t=>t.separator)?.separator||'；';
+ const prefixPattern=/^(\s*[（(]?)([\d一二三四五六七八九十百]+)([）)、.．]\s*)/;
+ const sample=tokens.map(t=>t.text.match(prefixPattern)).find(Boolean);
+ const numeral=(n,chinese)=>!chinese?String(n):n<10?'一二三四五六七八九'[n-1]:n===10?'十':n<20?'十'+'一二三四五六七八九'[n-11]:n<100?'一二三四五六七八九'[Math.floor(n/10)-1]+'十'+(n%10?'一二三四五六七八九'[n%10-1]:''):String(n);
+ for(const [i,item]of context.items.entries()){
+  const key=strategyName(item.title);if(kept.has(key))continue;
+  let pos=-1;for(let p=i-1;p>=0;p--){const found=nodes.findIndex(n=>n.key===strategyName(context.items[p].title));if(found>=0){pos=found+1;break;}}
+  if(pos<0){pos=nodes.findIndex(n=>context.items.slice(i+1).some(next=>n.key===strategyName(next.title)));if(pos<0)pos=nodes.length;}
+  const style=sample?sample[1]+numeral(pos+1,!/^\d+$/.test(sample[2]))+sample[3]:'';
+  nodes.splice(pos,0,{text:style+item.title,key,separator:pos?nodes[pos]?.separator||nodes[pos-1]?.separator||usualSeparator:''});
+  kept.add(key);addedTitles.push(item.title);
+ }
+ if(addedTitles.length||removedTitles.length)nodes.forEach((node,i)=>{node.text=node.text.replace(prefixPattern,(_,a,b,c)=>a+numeral(i+1,!/^\d+$/.test(b))+c);});
+ const text=addedTitles.length||removedTitles.length?nodes.map((n,i)=>(i?n.separator||usualSeparator:'')+n.text).join('')+trailing:original;
+ const warnings=removedTitles.length?['拟采用标题摘要将移除合同对应层级不存在的旧标题：'+removedTitles.join('、')+'。请在预览中确认。']:[];
+ return {text,lines:text.split(/\r?\n/),addedTitles,removedTitles,warnings};
+}
+
 export function resolveStrategySummary(contract,text,scope={}){
  const titles=shortStrategyTitles(text);if(!titles||!contract)return null;
  const context=strategyContext(contract,titles,scope);if(!context)return null;
@@ -228,13 +274,23 @@ export function resolveStrategySummary(contract,text,scope={}){
  [missing.length?'模板未呈现：'+missing.join('、'):'',rows.extra.length?'合同未对应：'+rows.extra.map(i=>i.title).join('、'):''].filter(Boolean).join('；')+'。请核对标题增减，不自动扩写正文。';
  return {status,value:status==='verified'?text:null,evidence:context.evidence,reason,reasonType:status==='verified'?'confirmed':'needs_review'};
 }
+export function resolveStrategyReplacement(contract,text,scope={}){
+ if(!contract)return undefined;
+ const titles=shortStrategyTitles(text);if(!titles)return undefined;
+ const context=strategyContext(contract,titles,scope);if(!context)return undefined;
+ return strategyTitleReplacement(context,text);
+}
 function strategySectionReview(task,facts,scope){
  const targets=(task.materials||[]).map(m=>({m,fields:(m.fields||[]).filter(f=>fieldMatches(task,f,'investment_strategy',scope))})).filter(t=>t.fields.length);
  for(const target of targets){target.source=unique(target.fields.map(f=>String(f.after??f.before??''))).join('\n');target.titles=shortStrategyTitles(target.source);}
  const titles=targets.flatMap(t=>t.titles||[]);if(!titles.length)return null;
  const context=strategyContext(task.contract,titles,scope);if(!context)return null;
  if(facts.some(f=>!sameScope(factScope(task,f),scope)))context.ambiguous=true;
- const materials=targets.map(({m,titles})=>titles?{materialId:m.materialId,name:m.template?.name||m.name||m.materialId,...strategyRows(context,titles)}:materialReview(task,m,'investment_strategy',scope,context.items)).filter(Boolean);
+ const materials=targets.map(({m,titles,source,fields})=>{
+  if(!titles)return materialReview(task,m,'investment_strategy',scope,context.items);
+  const ownContext=strategyContext(task.contract,titles,scope),replacement=!context.ambiguous&&!context.conflict&&ownContext?strategyTitleReplacement(ownContext,source):undefined;
+  return {materialId:m.materialId,name:m.template?.name||m.name||m.materialId,fieldIds:fields.map(f=>f.id),...strategyRows(context,titles),...(replacement?{replacement}:{})};
+ }).filter(Boolean);
  if(!materials.length)return null;
  const statuses=materials.flatMap(m=>[...m.items,...m.extra]).map(i=>i.status),missing=unique(materials.flatMap(m=>m.items.filter(i=>i.status==='missing').map(i=>i.title)));
  const kind=context.conflict||context.ambiguous||statuses.includes('uncertain')?'uncertain':statuses.includes('missing')?'structure':'aligned';
@@ -253,7 +309,8 @@ export function getSectionReview(task,factIds){
  sections=sections.filter(s=>!explicitMismatch(s));if(!sections.length)return null;
  const ambiguousScope=scopeUncertain||sections.some(s=>['share','channel'].some(k=>s.scope[k]&&!scope[k]));
  const ambiguous=ambiguousScope||sections.length>1;
- const items=ambiguous?[...new Map(sections.flatMap(s=>s.items).map(item=>[canonical(item.text),item])).values()]:sections[0].items;
+ const primary=sections.find(s=>!s.isAttachment)||sections[0];
+ const items=key==='investment_restrictions'?primary.items:ambiguous?[...new Map(sections.flatMap(s=>s.items).map(item=>[canonical(item.text),item])).values()]:sections[0].items;
  const materials=(task.materials||[]).map(m=>materialReview(task,m,key,scope,items)).filter(Boolean);
  if(!materials.length)return null;
  if(ambiguous)for(const material of materials)for(const item of material.items){if(item.status!=='missing'){item.status='uncertain';item.reason='存在不同合同章节或适用范围，列出各版本供核对，未选择其中一个作为更新依据。';}}
@@ -261,7 +318,8 @@ export function getSectionReview(task,factIds){
  const kind=ambiguous||statuses.includes('uncertain')?'uncertain':statuses.some(s=>s==='structure'||s==='missing')?'structure':statuses.includes('local')?'local':'aligned';
  const missing=unique(materials.flatMap(m=>m.items.filter(i=>i.status==='missing').map(i=>i.title)));
  const needsReview=kind==='structure'||kind==='uncertain';
- const summary=ambiguous?`${label}存在多个不同章节或适用范围尚不明确，请对照完整依据确认，未自动选择或合并。`:missing.length?`${label}完整依据共${items.length}项；部分物料未呈现：${missing.join('、')}。可能是摘要，请逐份核对是否补充。`:kind==='structure'?`${label}发现计量口径或条件差异，请查看逐项对照。`:kind==='uncertain'?`${label}存在尚不能确认对应关系的条目，请查看完整依据。`:statuses.includes('summary')?`${label}完整依据共${items.length}项，模板包含摘要表述；类别对应不代表已核实全部数值及条件，可展开完整依据核对。`:`${label}完整依据共${items.length}项，当前物料均已对应；保留原有局部更新规则。`;
+ const preferCompleteEvidence=key==='investment_restrictions'&&materials.some(m=>m.total>=3&&m.items.filter(i=>['missing','structure','uncertain'].includes(i.status)).length>=Math.ceil(m.total/2));
+ const summary=preferCompleteEvidence?`差异较大，建议使用完整合同依据 · 共${primary.items.length}项`+(primary.notes.length?`＋${primary.notes.length}段补充说明`:'')+(sections.length>1?'；另有其他版本依据，已分别保留供展开核对。':'。'):ambiguous?`${label}存在多个不同章节或适用范围尚不明确，请对照完整依据确认，未自动选择或合并。`:missing.length?`${label}完整依据共${items.length}项；部分物料未呈现：${missing.join('、')}。可能是摘要，请逐份核对是否补充。`:kind==='structure'?`${label}发现计量口径或条件差异，请查看逐项对照。`:kind==='uncertain'?`${label}存在尚不能确认对应关系的条目，请查看完整依据。`:statuses.includes('summary')?`${label}完整依据共${items.length}项，模板包含摘要表述；类别对应不代表已核实全部数值及条件，可展开完整依据核对。`:`${label}完整依据共${items.length}项，当前物料均已对应；保留原有局部更新规则。`;
  const replacement=key==='investment_ratios'&&!ambiguous?{lines:sections[0].content.map(line=>line.text)}:undefined;
- return {id:'section-'+key+'-'+JSON.stringify({share:scope.share||'',channel:scope.channel||'',issuer:scope.issuer||'',period:scope.period||'',condition:scope.condition||''}),key,label,evidence:sections.map(s=>({...s.evidence,blockIds:[...s.evidence.blockIds]})),materials,kind,needsReview,summary,...(replacement?{replacement}:{})};
+ return {id:'section-'+key+'-'+JSON.stringify({share:scope.share||'',channel:scope.channel||'',issuer:scope.issuer||'',period:scope.period||'',condition:scope.condition||''}),key,label,evidence:sections.map(s=>({...s.evidence,blockIds:[...s.evidence.blockIds],...(key==='investment_restrictions'?{variantRole:s===primary?'primary':'other_version'}:{})})),materials,kind,needsReview,summary,...(replacement?{replacement}:{}),...(preferCompleteEvidence?{preferCompleteEvidence:true}:{})};
 }

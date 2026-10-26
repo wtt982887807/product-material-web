@@ -1,10 +1,12 @@
 // Local evidence rules. No network calls and no product-specific answer tables.
-export {getSectionReview} from './contract-sections.js?v=20261026-contract-apply';
-import {resolveStrategySummary} from './contract-sections.js?v=20261026-contract-apply';
-import {previewSectionAdoption,adoptSection,refreshSectionOperations,releaseSection} from './section-adoption.js?v=20261026-contract-apply';
+export {getSectionReview} from './review-sections.js?v=20261026-opening-strategy';
+import {resolveStrategySummary} from './contract-sections.js?v=20261026-opening-strategy';
+import {previewSectionAdoption,adoptSection,refreshSectionOperations,releaseSection} from './section-adoption.js?v=20261026-opening-strategy';
 import {NS,elements} from './office-xml.js';
 import {parseDateInput,formatDateLike,parsePerformanceInput,parseOpeningInput} from './supplement-parser.js?v=20261026-rows';
 import {monthlyWeekdayPatterns,parseMonthlyWeekdayInput,monthlyWeekdayChanges} from './monthly-weekday.js?v=20261026-monthly';
+import {resolveMonthlyDateRule} from './opening-rules.js?v=20261026-opening-strategy';
+export {getOpeningRuleReview} from './opening-rules.js?v=20261026-opening-strategy';
 import {getTradingDays} from './trading-calendar.js?v=20261026-openings';
 const PRODUCT_END='(?:集合资金信托计划|集合资产信托计划|集合资产管理计划|单一资产管理计划|资产管理计划|证券投资基金|信托计划)';
 const NAME_LABEL=/^(?:产品名称|产品全称|信托名称|信托计划名称|基金名称|计划名称|资产管理计划名称|产品简称)$/;
@@ -508,6 +510,10 @@ function renderRecord({m,field,p,atom,f,userRenderValue}){
  if(field.sectionOverrideId)return;
  const common={paragraphId:p.id,part:p.part,index:p.index,reason:f.reason,factIds:[f.id]};
  if(f.userConfirmed)return;
+ if(atom.key==='opening_fixed_monthdays'&&f.status==='verified'){
+  for(const change of atom.monthdayChanges||[])m.operations.push({...common,...change,id:operationId(m),kind:'replace'});
+  return;
+ }
  if(atom.key==='opening_monthly_weekday'){
   const result=f.status==='verified'?monthlyWeekdayChanges(atom.monthlyPattern,String(f.value)):{changes:[]};
   if(f.status==='verified'&&!result.warning){for(const diff of result.changes)m.operations.push({...common,id:operationId(m),kind:'replace',start:atom.start+diff.start,before:diff.before,after:diff.after});}
@@ -524,13 +530,31 @@ function renderRecord({m,field,p,atom,f,userRenderValue}){
   const diffs=[];
   if(lines&&lines.length===after.split('\n').length){let offset=0;const next=after.split('\n');for(let i=0;i<lines.length;i++){const diff=minimalChange(lines[i],next[i]);diffs.push({...diff,start:offset+diff.start});offset+=lines[i].length+1;}}
   else diffs.push(atom.before.length<35&&!['product_name','manager','custodian','advisor','distributor'].includes(atom.key)?{start:0,before:atom.before,after}:minimalChange(atom.before,after));
-  for(const diff of diffs)if(diff.before||diff.after)m.operations.push({...common,id:operationId(m),kind:'replace',start:atom.start+diff.start,before:diff.before,after:diff.after});
+  for(const diff of diffs)if(diff.before||diff.after){
+   // A pure insertion still needs a precise existing-text anchor for the
+   // Office writer. Keep the anchor inside this atom, never a global match.
+   let {start,before,after:replacement}=diff;
+   if(!before){const next=[...atom.before.slice(start)][0];if(next){before=next;replacement+=next;}else{const previous=[...atom.before.slice(0,start)].at(-1);if(previous){start-=previous.length;before=previous;replacement=previous+replacement;}}}
+   m.operations.push({...common,id:operationId(m),kind:'replace',start:atom.start+start,before,after:replacement});
+  }
  }else{
   const spans=atom.before.matchAll(/\d+(?:\.\d+)?\s*[%％]?|R[1-5]|[一二三四五六日天](?=开放)/g);const list=[...spans];
   // Compound pending text is anchored to each parameter rather than painting whole cells.
   const anchors=list.length?list.map(s=>({start:atom.start+s.index,before:s[0]})):[{start:atom.start,before:atom.before}];
   for(const a of anchors)if(a.before){m.operations.push({...common,...a,id:operationId(m),kind:'highlight',color:'yellow'});m.operations.push({...common,...a,id:operationId(m),kind:'comment'});}
  }
+}
+function reviewFixedMonthlyOpening(task,m,field,paragraphs){
+ if(keyFor(field.label)!=='opening'||field.manualReviewReason)return false;
+ const scope=scopeFor(field.label,field.before),resolution=resolveMonthlyDateRule(task.contract,field.before,scope);if(!resolution)return false;
+ // A distinct wording/condition retains its own review status, while repeated
+ // paragraphs of this one field share one complete-rule fact.
+ scope.condition=norm(field.before);let offset=0;
+ for(const p of paragraphs){
+  if(p.text.trim())addOccurrence(task,m,field,p,{key:'opening_fixed_monthdays',start:0,before:p.text,value:p.text,scope,monthdayChanges:resolution.changes.filter(c=>c.start>=offset&&c.start+c.before.length<=offset+p.text.length).map(c=>({...c,start:c.start-offset}))},resolution);
+  offset+=p.text.length+1;
+ }
+ return true;
 }
 function reviewParagraph(task,m,field,p,rs){
  if(reviewPerformancePolicy(task,m,field,p,rs))return;
@@ -583,7 +607,7 @@ export function analyzeMaterials(contract,templates,{now,month}={}){
   Object.defineProperty(m,'_strategySummaries',{value:new Map([...strategyGroups].map(([key,g])=>[key,resolveStrategySummary(contract,unique(g.texts).join('\n'),g.scope)]))});
   for(const row of rows){
    const ps=fieldParagraphs(row,map);ps.forEach(p=>selectedIds.add(p.id));const field={id:`${t.id}-field-${m.fields.length+1}`,label:row.label,status:'pending',before:ps.map(p=>p.text).join('\n'),after:'',factIds:[],paragraphIds:ps.map(p=>p.id),reason:'',manualReviewReason:row.manualReviewReason};m.fields.push(field);
-   for(const p of ps)if(p.text.trim())reviewParagraph(task,m,field,p,rs);
+   if(!reviewFixedMonthlyOpening(task,m,field,ps))for(const p of ps)if(p.text.trim())reviewParagraph(task,m,field,p,rs);
   }
   for(const p of freePerformance){if(selectedIds.has(p.id))continue;selectedIds.add(p.id);const field={id:`${t.id}-field-${m.fields.length+1}`,label:'业绩报酬',status:'pending',before:p.text,after:'',factIds:[],paragraphIds:[p.id]};m.fields.push(field);reviewParagraph(task,m,field,p,rs);}
   // Direct identity repeats are safe only in title/disclosure text, never performance prose or peer tables.
