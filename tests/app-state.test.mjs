@@ -190,6 +190,27 @@ test('changing the acknowledged wording or tail explanation invalidates coverage
  assert.ok(!buttonIn(findCard(),'撤销差异确认'));
 });
 
+test('ratio adoption previews complete content, applies only on confirmation and can be undone',async()=>{
+ const app=createApp({taskFactory:incompleteAllocationTask});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ const card=()=>app.elements.get('facts-list').children.find(n=>descendants(n).some(c=>c.tagName==='strong'&&c.textContent==='投资比例'));
+ const before=JSON.stringify(app.state.task.materials.map(m=>m.fields.map(f=>f.after)));
+ await buttonIn(card(),'预览采用合同投资比例').click();assert.equal(JSON.stringify(app.state.task.materials.map(m=>m.fields.map(f=>f.after))),before);
+ assert.ok(descendants(card()).some(n=>n.textContent.includes('境外投资')));
+ await buttonIn(card(),'确认采用合同投资比例').click();assert.equal(Number(app.elements.get('count-pending').textContent),0);
+ assert.ok(app.state.task.materials[0].fields.map(f=>f.after).join('\n').includes('境外投资'));
+ await buttonIn(card(),'撤销采用合同内容').click();assert.equal(JSON.stringify(app.state.task.materials.map(m=>m.fields.map(f=>f.after))),before);
+});
+
+test('no-fee review never displays old charging parameters or an irrelevant supplement form',async()=>{
+ const app=createApp({taskFactory:(contract,templates,options)=>{
+  const task=narrativeTask(contract,templates,options),m=task.materials[0];
+  const f={id:'policy',key:'performance_policy',label:'业绩报酬',status:'verified',value:'本集合计划不提取业绩报酬。',policyMode:'none',source:'contract',scope:{product:task.target.name},evidence:[{blockId:'c',quote:'本集合计划不提取业绩报酬。'}],occurrences:[{materialId:m.materialId,paragraphId:'oldfee'}]};task.facts=[f];
+  m.fields=[{id:'fee',label:'业绩报酬',before:'超过5%的部分提取20%作为业绩报酬。',after:f.value,factIds:[f.id],paragraphIds:['oldfee']}];m.operations=[{kind:'replace',factIds:[f.id]}];return task;
+ }});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ const card=app.elements.get('facts-list').children.find(n=>n.tagName==='article');const nodes=descendants(card);
+ assert.ok(nodes.some(n=>n.textContent==='本集合计划不提取业绩报酬。'));assert.ok(!nodes.some(n=>/5%|20%/.test(n.textContent)));assert.ok(!nodes.some(n=>n.tagName==='form'));assert.ok(!buttonIn(card,'确认无误'));
+});
+
 test('download review notes retain full section evidence and distinguish unresolved coverage from confirmed wording',async()=>{
  const app=createApp({taskFactory:incompleteAllocationTask});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
  await app.elements.get('generate-button').click();
