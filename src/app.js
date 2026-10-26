@@ -85,7 +85,7 @@ $('reset-button').onclick=()=>{state.run++;state.contract=null;state.templates=[
 $('analyze-button').onclick=async()=>{
  if(state.busy||!state.companyReady)return;try{updateMonth();}catch(error){showError(error);return;}const run=++state.run;invalidate();setBusy(true);progress('正在读取合同','建立本次合同索引，保留文字出处。');await nextPaint();
  try{
-  const [{readWordContract,readWordTemplate},reviewApi]=await Promise.all([import('./word-input.js'),import('./review-engine.js?v=20261026-openings')]);state.reviewApi=reviewApi;const {analyzeMaterials}=reviewApi;
+  const [{readWordContract,readWordTemplate},reviewApi]=await Promise.all([import('./word-input.js'),import('./review-engine.js?v=20261026-monthly')]);state.reviewApi=reviewApi;const {analyzeMaterials}=reviewApi;
   const contract=await readWordContract({name:state.contract.name,bytes:new Uint8Array(await state.contract.arrayBuffer())},{onProgress:progress});
   const templates=[],inputIssues=[],seen=new Set();
   for(const [i,file]of state.templates.entries()){
@@ -119,7 +119,7 @@ function renderFact(fact){
  for(const m of state.task.materials){const fields=m.fields.filter(f=>f.factIds?.includes(fact.id));for(const field of fields){const occurrence=el('div','occurrence');occurrence.append(el('strong','',m.template.name+' · '+field.label));const before=field.before||'';const after=field.after??before;if(before!==after){const b=el('p');b.append(el('del','',before));const a=el('p');a.append(el('ins','',after));occurrence.append(b,a);}else occurrence.append(el('p','',before));details.append(occurrence);}}
  row.append(details);
  if(fact.status!=='verified'){
-  const form=el('form','supplement');const input=el('input');input.placeholder='有明确补充资料时，可在这里填写';input.setAttribute('aria-label','补充'+(fact.label||fact.key));const button=el('button','','确认补充');button.type='submit';form.append(input,button);form.onsubmit=async e=>{e.preventDefault();if(!input.value.trim())return;try{const {setSupplement}=await import('./review-engine.js?v=20261026-openings');state.task=await setSupplement(state.task,fact.id,input.value);clearDownloads();$('error-panel').hidden=true;changeStep('review');renderReview();}catch(error){showError(error);}};row.append(form);
+  const form=el('form','supplement');const input=el('input');input.placeholder='有明确补充资料时，可在这里填写';input.setAttribute('aria-label','补充'+(fact.label||fact.key));const button=el('button','','确认补充');button.type='submit';form.append(input,button);form.onsubmit=async e=>{e.preventDefault();if(!input.value.trim())return;try{const {setSupplement}=await import('./review-engine.js?v=20261026-monthly');state.task=await setSupplement(state.task,fact.id,input.value);clearDownloads();$('error-panel').hidden=true;changeStep('review');renderReview();}catch(error){showError(error);}};row.append(form);
  }
  return row;
 }
@@ -129,7 +129,7 @@ function reviewEdited(message){clearDownloads();discardSupplementPreview();$('er
 function groups(){return state.reviewApi?.getSupplementGroups?state.reviewApi.getSupplementGroups(state.task):state.task.facts.map(f=>({id:f.id,label:f.label,kind:'text',factIds:[f.id],status:f.status}));}
 function groupFacts(group){return group.factIds.map(id=>state.task.facts.find(f=>f.id===id)).filter(Boolean);}
 function scopedGroupLabel(group){const s=group.scope||{},parts=[s.share?s.share+'类份额':'',s.channel,s.issuer==='distributor'?'代销口径':''].filter(Boolean);return group.label+(parts.length?' · '+parts.join(' · '):'');}
-function readableFact(f){const labels={opening_cycle:['开放周期','个月'],opening_days:['开放天数','个交易日'],opening_monthday:['每月开放日','日'],opening_weekday:['开放星期','']};const mapped=labels[f.key];if(mapped)return mapped[0]+'：'+f.value+mapped[1];if(f.key==='opening_announced_date'){const parts=(f.scope?.condition||'').split('|'),label=({participation_exit:'参与和退出',participation_only:'仅参与'})[parts[3]]||({opening:'本次开放日',sale:'本次开售日',reservation:'本次预约日'})[parts[0]]||'本次开放日';return label+'：'+f.value;}return f.label+'：'+f.value;}
+function readableFact(f){const labels={opening_cycle:['开放周期','个月'],opening_days:['开放天数','个交易日'],opening_monthday:['每月开放日','日'],opening_weekday:['开放星期',''],opening_monthly_weekday:['月内开放安排','']};const mapped=labels[f.key];if(mapped)return mapped[0]+'：'+f.value+mapped[1];if(f.key==='opening_announced_date'){const parts=(f.scope?.condition||'').split('|'),label=({participation_exit:'参与和退出',participation_only:'仅参与'})[parts[3]]||({opening:'本次开放日',sale:'本次开售日',reservation:'本次预约日'})[parts[0]]||'本次开放日';return label+'：'+f.value;}return f.label+'：'+f.value;}
 const examples={date:'2026年11月23日至2026年11月27日',performance:'2.0%＜年化收益率≤3.0%，计提20%；年化收益率＞3.0%，计提40%',benchmark:'2.25%',code:'000123',opening:'每满18个月，开放5个交易日',text:'填写本次确认使用的内容'};
 function renderGroup(group){
  const fs=groupFacts(group),pending=fs.some(f=>f.status!=='verified'),confirmed=fs.some(isConfirmed),changed=fs.some(factChanged),status=pending?'pending':confirmed?'confirmed':changed?'changed':'verified';
