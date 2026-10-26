@@ -21,9 +21,9 @@ test('one opening-date group updates range, start and end while keeping each dat
  assert.ok(t.materials.every(m=>!m.operations.some(o=>o.kind==='highlight')));
 });
 
-test('date groups do not merge sale, opening, reservations or share classes',()=>{
+test('sale and opening dates merge while reservations and share classes remain separate',()=>{
  const t=task([template('a',[['本次开放日','2026/8/12'],['募集开放日','2026/8/12'],['预约开放日','2026/8/12'],['A类份额开放日','2026/8/12'],['B类份额开放日','2026/8/12']])]);
- assert.equal(getSupplementGroups(t).filter(g=>g.kind==='date').length,5);
+ assert.equal(getSupplementGroups(t).filter(g=>g.kind==='date').length,4);
  const p=previewSupplementText(t,'本次开放日：2026/11/3');assert.equal(p.updates.length,0);assert.match(p.warnings.join(''),/多个份额/);
 });
 

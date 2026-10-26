@@ -132,7 +132,8 @@ const buttonIn=(element,text)=>descendants(element).find(n=>n.tagName==='button'
 test('five independent rows apply only the parsed row after confirmation',async()=>{
  const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();appendSupplementFacts(app);
  assert.equal(descendants(app.elements.get('facts-list')).filter(n=>n.tagName==='strong'&&n.textContent==='本次开放日').length,1);
- for(const kind of ['date','performance','benchmark','code','opening'])assert.equal(app.elements.get('supplement-'+kind).value,'');
+ for(const kind of ['date','benchmark','code','opening'])assert.equal(app.elements.get('supplement-'+kind).value,'');
+ for(const key of ['threshold1','ratio1','threshold2','ratio2'])assert.equal(app.elements.get('performance-'+key).value,'');
  app.elements.get('supplement-date').value='2026年11月3日至2026年11月5日';
  app.elements.get('supplement-code').value='000123';
  await app.elements.get('supplement-parse-code').click();assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null);
@@ -189,6 +190,34 @@ test('an empty or failed row parse cannot leave an earlier preview applicable',a
   app.elements.get('supplement-code').value='000123';await app.elements.get('supplement-parse-code').click();const oldButton=buttonIn(app.elements.get('supplement-preview'),'确认并应用补充');
   app.elements.get('supplement-date').value=value;await app.elements.get('supplement-parse-date').click();await oldButton.click();
   assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null);assert.equal(app.state.supplementPreview,null);
+ }
+});
+
+function appendPerformanceFacts(app,tiered=false){
+ for(const key of ['performance_R1','performance_ratio_1',...(tiered?['performance_R2','performance_ratio_2']:[])])app.state.task.facts.push({id:key,key,label:key,value:null,status:'pending',scope:{product:app.state.task.target.name},evidence:[],occurrences:[]});app.renderReview();
+}
+test('single-tier numeric fee input previews two numbers and leaves the other rows alone',async()=>{
+ const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();appendSupplementFacts(app);appendPerformanceFacts(app);
+ assert.equal(app.elements.get('performance-mode').value,'single');assert.equal(app.elements.get('performance-threshold2-wrap').hidden,true);
+ app.elements.get('performance-threshold1').value='2.50';app.elements.get('performance-ratio1').value='60';app.elements.get('supplement-code').value='009999';
+ await app.elements.get('supplement-parse-performance').click();assert.equal(app.state.task.facts.find(f=>f.id==='performance_R1').value,null);
+ await buttonIn(app.elements.get('supplement-preview'),'确认并应用补充').click();
+ assert.equal(app.state.task.facts.find(f=>f.id==='performance_R1').value,'2.5%');assert.equal(app.state.task.facts.find(f=>f.id==='performance_ratio_1').value,'60%');assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null);
+});
+test('tiered numeric input uses all four fields and mode or value edits invalidate preview',async()=>{
+ const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();appendPerformanceFacts(app,true);
+ app.elements.get('performance-mode').value='tiered';await app.elements.get('performance-mode').dispatch('change');assert.equal(app.elements.get('performance-threshold2-wrap').hidden,false);
+ for(const [key,value]of Object.entries({threshold1:'2',threshold2:'3',ratio1:'20',ratio2:'40'}))app.elements.get('performance-'+key).value=value;
+ await app.elements.get('supplement-parse-performance').click();const previous=buttonIn(app.elements.get('supplement-preview'),'确认并应用补充');
+ app.elements.get('performance-ratio2').value='50';await app.elements.get('performance-ratio2').dispatch('input');await previous.click();assert.ok(app.state.task.facts.filter(f=>f.key.startsWith('performance_')).every(f=>f.value===null));
+ await app.elements.get('supplement-parse-performance').click();await buttonIn(app.elements.get('supplement-preview'),'确认并应用补充').click();assert.equal(app.state.task.facts.find(f=>f.key==='performance_ratio_2').value,'50%');
+ await app.elements.get('supplement-parse-performance').click();const old=buttonIn(app.elements.get('supplement-preview'),'确认并应用补充');app.elements.get('performance-mode').value='single';await app.elements.get('performance-mode').dispatch('change');await old.click();assert.equal(app.state.supplementPreview,null);
+});
+test('empty and incomplete numeric fee inputs cannot apply another row preview',async()=>{
+ const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();appendSupplementFacts(app);appendPerformanceFacts(app);
+ for(const first of ['', '2.5']){
+  app.elements.get('supplement-code').value='000123';await app.elements.get('supplement-parse-code').click();const old=buttonIn(app.elements.get('supplement-preview'),'确认并应用补充');app.elements.get('performance-threshold1').value=first;
+  await app.elements.get('supplement-parse-performance').click();await old.click();assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null);assert.equal(app.state.supplementPreview,null);
  }
 });
 
