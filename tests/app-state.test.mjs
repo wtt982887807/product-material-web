@@ -138,6 +138,67 @@ function narrativeTask(contract,templates,options){
  }
  return reviewEngine.analyzeMaterials({...contract,warnings:[],blocks:[{id:'name',text:'产品名称：晨星稳健9号集合资产管理计划'}]},[t],options);
 }
+
+const allocationClauses=[
+ '（1）固定收益类资产：占集合计划资产总值的20%～100%（不含）；',
+ '（2）权益类资产：占集合计划资产总值的0%～40%（不含）；',
+ '（3）期货和衍生品类账户权益：占集合计划资产总值的0%～20%（不含）；',
+ '（4）公募基金：占集合计划资产总值的0%～80%；',
+ '（5）境外投资：占集合计划资产总值的0%～50%（不含）。',
+];
+function incompleteAllocationTask(contract,templates,options){
+ const base=narrativeTask(contract,templates,options),t=base.templates[0];
+ const fields=[['产品名称','晨星稳健3号集合资产管理计划'],...allocationClauses.slice(0,3).map(text=>['投资比例',text])];
+ t.rows=[];t.paragraphs=[];
+ for(const [i,[label,value]]of fields.entries()){
+  const ids=['label'+i,'value'+i];[label,value].forEach((text,cellIndex)=>t.paragraphs.push({id:ids[cellIndex],text,part:'word/document.xml',page:1,index:i*2+cellIndex,tableId:'t',rowIndex:i,cellIndex}));
+  t.rows.push({id:'row'+i,label,value,tableId:'t',part:'word/document.xml',page:1,paragraphIds:ids,cells:[{text:label,paragraphIds:[ids[0]]},{text:value,paragraphIds:[ids[1]]}]});
+ }
+ const texts=['产品名称：晨星稳健9号集合资产管理计划','3、投资比例',...allocationClauses,'上述投资比例应当按照穿透原则合并计算。','4、产品风险等级','本计划风险等级为R3。'];
+ return reviewEngine.analyzeMaterials({...contract,blocks:texts.map((text,i)=>({id:'contract-'+i,text})),warnings:[]},[t],options);
+}
+
+test('complete section coverage stays visible even when every existing template clause is verified',async()=>{
+ const app=createApp({taskFactory:incompleteAllocationTask});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ const task=app.state.task,allocations=task.facts.filter(f=>f.key==='investment_ratios');assert.ok(allocations.every(f=>f.status==='verified'));
+ const card=app.elements.get('facts-list').children.find(n=>descendants(n).some(c=>c.tagName==='strong'&&c.textContent==='投资比例'));
+ assert.ok(card,'A missing contract clause must appear in the default focus filter');
+ const nodes=descendants(card);assert.ok(nodes.some(n=>n.className==='section-review-summary'&&/公募基金/.test(n.textContent)&&/境外投资/.test(n.textContent)));
+ const evidence=nodes.filter(n=>n.tagName==='blockquote').map(n=>n.textContent).join('\n');
+ for(const text of [...allocationClauses,'上述投资比例应当按照穿透原则合并计算。'])assert.ok(evidence.includes(text),text);
+ assert.ok(!evidence.includes('本计划风险等级为R3'));
+ assert.ok(Number(app.elements.get('count-pending').textContent)>0);
+ const before=JSON.stringify(task.materials.map(m=>m.operations));
+ await buttonIn(card,'已核对差异，保留当前表述').click();
+ assert.equal(JSON.stringify(task.materials.map(m=>m.operations)),before,'Coverage acknowledgement cannot rewrite any Office content');
+ assert.equal(Number(app.elements.get('count-pending').textContent),0);
+ app.state.filter='pending';app.renderReview();assert.ok(!app.elements.get('facts-list').children.some(n=>n.tagName==='article'));
+ app.state.filter='focus';app.renderReview();
+ const confirmedCard=app.elements.get('facts-list').children.find(n=>descendants(n).some(c=>c.textContent==='已核对差异，保留当前表述'));
+ assert.ok(confirmedCard,'Acknowledged coverage remains inspectable in focus');
+ await buttonIn(confirmedCard,'撤销差异确认').click();assert.ok(Number(app.elements.get('count-pending').textContent)>0);
+});
+
+test('changing the acknowledged wording or tail explanation invalidates coverage acknowledgement',async()=>{
+ const app=createApp({taskFactory:incompleteAllocationTask});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ const findCard=()=>app.elements.get('facts-list').children.find(n=>descendants(n).some(c=>c.tagName==='strong'&&c.textContent==='投资比例'));
+ await buttonIn(findCard(),'已核对差异，保留当前表述').click();assert.equal(Number(app.elements.get('count-pending').textContent),0);
+ const field=app.state.task.materials[0].fields.find(f=>f.label==='投资比例');
+ field.after+='\n上述比例按资产净值计算。';app.renderReview();
+ assert.ok(Number(app.elements.get('count-pending').textContent)>0);
+ assert.ok(buttonIn(findCard(),'已核对差异，保留当前表述'));
+ assert.ok(!buttonIn(findCard(),'撤销差异确认'));
+});
+
+test('download review notes retain full section evidence and distinguish unresolved coverage from confirmed wording',async()=>{
+ const app=createApp({taskFactory:incompleteAllocationTask});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ await app.elements.get('generate-button').click();
+ const link=app.elements.get('download-list').children.find(n=>n.tagName==='a'&&n.download.endsWith('.zip'));
+ const zip=await JSZip.loadAsync(await app.blobs.get(link.href).arrayBuffer());
+ const notes=await zip.file('审阅清单.txt').async('string');
+ assert.match(notes,/章节覆盖待核/);assert.match(notes,/公募基金/);assert.match(notes,/境外投资/);assert.match(notes,/穿透原则合并计算/);
+ assert.equal(app.elements.get('error-panel').hidden,true,'Coverage warning must not block download');
+});
 test('narrative review cards combine display and confirmation while keeping each original supplement separate',async()=>{
  const app=createApp({taskFactory:narrativeTask});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
  const cards=()=>app.elements.get('facts-list').children.filter(n=>n.tagName==='article');
@@ -214,6 +275,16 @@ test('Excel preview includes both schedule bounds and the complete window rule b
  await buttonIn(app.elements.get('supplement-preview'),'确认并应用补充').click();
  assert.equal(app.state.task.facts.find(f=>f.id==='date-c').status,'verified');
  assert.equal(app.state.task.facts.find(f=>f.id==='date-c').value,'2026/9/8至2026/9/14');
+});
+
+test('Excel with only an end date labels the cutoff and sends it for range preview without applying',async()=>{
+ const row={id:'row-2',productName:'示例稳健1号',openingEnd:'2026/9/14',source:{file:'日历.xlsx',sheet:'Sheet1',row:2}};
+ const app=await appForCalendar({readProductCalendar:async()=>({name:'日历.xlsx',rows:[row],warnings:[]}),matchCalendarRows:()=>[row]});
+ await app.elements.get('calendar-drop').dispatch('drop',{dataTransfer:{files:[file('日历.xlsx')]}});
+ const details=descendants(app.elements.get('calendar-row-detail')).map(n=>n.textContent).join('\n');
+ assert.match(details,/开放截止日：2026\/9\/14/);assert.doesNotMatch(details,/不自动套用/);
+ assert.match(app.state.supplementPreview.text,/本次开放截止日：2026\/9\/14/);
+ assert.equal(app.state.task.facts.find(f=>f.id==='date-a').value,null);
 });
 
 test('editing a row after preview cannot apply the stale parsed values',async()=>{
