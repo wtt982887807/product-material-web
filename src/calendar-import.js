@@ -129,3 +129,21 @@ export async function readProductCalendar({name,bytes}){
  if(!result.length)warnings.push('未读取到产品数据，可继续手动补充。');
  return {name,rows:result,warnings};
 }
+
+// Only the note for the end column can change that endpoint's meaning.
+// A separate general note about reservations does not redefine the opening end.
+export function calendarOpeningRange(row){
+ const start=row.openingStart||row.openingDate||'',rawEnd=row.openingEnd||'',endNote=String(row.fields?.endNote?.value||'');
+ const reservationEnd=!!rawEnd&&/(?:预约.{0,12}(?:截止|结束)|(?:截止|结束).{0,12}预约)/.test(endNote);
+ const end=reservationEnd?'':rawEnd,value=start&&end?start+'至'+end:start;
+ const warning=reservationEnd?`档期结束备注明确为预约截止安排，${rawEnd}未作为开放结束日填入；请单独核对本次开放结束日。`:'';
+ return{start,end,value,warning};
+}
+
+// The complete schedule is one input: do not drop its end or its window rules.
+export function calendarSupplementText(row){
+ const {start,value}=calendarOpeningRange(row);
+ const pairs=[['产品代码',row.productCode],['本次开放日',value],['开放期',row.openingPeriod],['业绩报酬',row.performanceText],['业绩比较基准',row.benchmark]];
+ if(start&&row.openingDateNote)pairs.push(['分段规则',String(row.openingDateNote).replace(/[;；\r\n]+/g,'，')]);
+ return pairs.filter(([,value])=>value!==undefined&&value!==null&&value!=='').map(([label,value])=>label+'：'+value).join('\n');
+}
