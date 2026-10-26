@@ -129,10 +129,12 @@ function appendSupplementFacts(app){
 }
 const buttonIn=(element,text)=>descendants(element).find(n=>n.tagName==='button'&&n.textContent===text);
 
-test('five independent rows apply only the parsed row after confirmation',async()=>{
+test('four independent rows exclude contract opening rules and apply only the parsed row after confirmation',async()=>{
  const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();appendSupplementFacts(app);
  assert.equal(descendants(app.elements.get('facts-list')).filter(n=>n.tagName==='strong'&&n.textContent==='本次开放日').length,1);
- for(const kind of ['date','benchmark','code','opening'])assert.equal(app.elements.get('supplement-'+kind).value,'');
+ assert.equal(app.elements.has('supplement-opening'),false);
+ assert.equal(app.elements.has('supplement-parse-opening'),false);
+ for(const kind of ['date','benchmark','code'])assert.equal(app.elements.get('supplement-'+kind).value,'');
  for(const key of ['threshold1','ratio1','threshold2','ratio2'])assert.equal(app.elements.get('performance-'+key).value,'');
  app.elements.get('supplement-date').value='2026年11月3日至2026年11月5日';
  app.elements.get('supplement-code').value='000123';
