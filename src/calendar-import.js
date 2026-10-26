@@ -114,10 +114,11 @@ export async function readProductCalendar({name,bytes}){
    const openingStart=validDate(value('openingStart')),openingEnd=validDate(value('openingEnd')),startNote=value('startNote'),endNote=value('endNote'),openingNote=value('openingNote'),stage=value('stage');
    const isReservation=/预约|截止预约|家族端/.test(startNote+' '+endNote),dateEvent='opening';
    // The user's calendar defines this opening day as the schedule start date.
-   // Keep the end date separately; never infer the start from a lone deadline.
+   // Keep the endpoint explicit; the review engine can infer a start only with
+   // a verified trading-day duration and a supported exchange calendar.
    const openingDate=openingStart||validDate(value('openingDate'));
    if(!openingDate&&isReservation)warnings.push(`${sheetName}第${r+1}行：档期为预约截止安排，未自动用作开放日期。`);
-   if(!openingDate&&openingEnd&&!openingStart&&!isReservation)warnings.push(`${sheetName}第${r+1}行：仅有档期结束日期，未推断首个开放日。`);
+   if(!openingDate&&openingEnd&&!openingStart&&!isReservation)warnings.push(`${sheetName}第${r+1}行：仅有档期结束日期，将按合同或模板明确的交易日天数反推，结果需预览确认。`);
    const performanceLower=percentage(cell('performanceLower')),performanceUpper=percentage(cell('performanceUpper')),performanceLowRatio=percentage(cell('performanceLowRatio')),performanceHighRatio=percentage(cell('performanceHighRatio'));
    // Explicit R assignments retain the identity of a lone bound or payout tier.
    // Omitting an empty lower column must never renumber an upper bound as R1.
@@ -133,7 +134,7 @@ export async function readProductCalendar({name,bytes}){
 // Only the note for the end column can change that endpoint's meaning.
 // A separate general note about reservations does not redefine the opening end.
 export function calendarOpeningRange(row){
- const start=row.openingStart||row.openingDate||'',rawEnd=row.openingEnd||'',endNote=String(row.fields?.endNote?.value||'');
+ const start=row.openingStart||row.openingDate||'',rawEnd=row.openingEnd||'',endNote=String(row.fields?.endNote?.value||(!row.fields&&!start?row.openingDateNote:'')||'');
  const reservationEnd=!!rawEnd&&/(?:预约.{0,12}(?:截止|结束)|(?:截止|结束).{0,12}预约)/.test(endNote);
  const end=reservationEnd?'':rawEnd,value=start&&end?start+'至'+end:start;
  const warning=reservationEnd?`档期结束备注明确为预约截止安排，${rawEnd}未作为开放结束日填入；请单独核对本次开放结束日。`:'';
@@ -142,9 +143,10 @@ export function calendarOpeningRange(row){
 
 // The complete schedule is one input: do not drop its end or its window rules.
 export function calendarSupplementText(row){
- const {start,value}=calendarOpeningRange(row);
+ const {start,end,value}=calendarOpeningRange(row);
  // Recurring opening rules come from the contract, not the calendar supplement.
  const pairs=[['产品代码',row.productCode],['本次开放日',value],['业绩报酬',row.performanceText],['业绩比较基准',row.benchmark]];
- if(start&&row.openingDateNote)pairs.push(['分段规则',String(row.openingDateNote).replace(/[;；\r\n]+/g,'，')]);
+ if(!start&&end)pairs.push(['本次开放截止日',end]);
+ if((start||end)&&row.openingDateNote)pairs.push(['分段规则',String(row.openingDateNote).replace(/[;；\r\n]+/g,'，')]);
  return pairs.filter(([,value])=>value!==undefined&&value!==null&&value!=='').map(([label,value])=>label+'：'+value).join('\n');
 }
