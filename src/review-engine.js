@@ -1,6 +1,7 @@
 // Local evidence rules. No network calls and no product-specific answer tables.
 import {NS,elements} from './office-xml.js';
-import {parseDateInput,formatDateLike,parsePerformanceInput,parseOpeningInput} from './supplement-parser.js?v=20261026';
+import {parseDateInput,formatDateLike,parsePerformanceInput,parseOpeningInput} from './supplement-parser.js?v=20261026-monthly';
+import {monthlyWeekdayPatterns,parseMonthlyWeekdayInput,monthlyWeekdayChanges} from './monthly-weekday.js?v=20261026-monthly';
 import {getTradingDays} from './trading-calendar.js?v=20261026-openings';
 const PRODUCT_END='(?:集合资金信托计划|集合资产信托计划|集合资产管理计划|单一资产管理计划|资产管理计划|证券投资基金|信托计划)';
 const NAME_LABEL=/^(?:产品名称|产品全称|信托名称|信托计划名称|基金名称|计划名称|资产管理计划名称|产品简称)$/;
@@ -61,6 +62,14 @@ function pick(candidates,reason='自动核对未能确定此参数，请查看�
 }
 function findMatches(rs,re,transform=(m)=>m[1],filter=()=>true){const out=[];for(const b of rs){if(!filter(b))continue;for(const m of b.text.matchAll(new RegExp(re.source,re.flags.includes('g')?re.flags:re.flags+'g'))){const v=transform(m,b);if(v!==null&&v!==undefined&&v!=='')out.push({value:String(v),evidence:[quote(b.base||b,b.text)]});}}return out;}
 function filtered(rs,scope){return rs.filter(b=>!/(?:假设示例|例如.{0,5}本产品|举例说明)/.test(b.text)&&(!scope.share||!/[A-Z]类/.test(b.text)||b.text.includes(scope.share+'类')));}
+function monthlyOpeningContext(text,pattern){
+ const before=text.slice(0,pattern.start),start=Math.max(...['。','；',';','\n'].map(c=>before.lastIndexOf(c)))+1,tail=text.slice(pattern.start+pattern.before.length),end=tail.search(/[。；;\n]/),right=end<0?tail:tail.slice(0,end),local=text.slice(start,pattern.start)+pattern.before+right;
+ const action=right.search(/开放|办理(?:参与|退出|申购|赎回)|(?:参与|申购)(?:和|及)(?:退出|赎回)/),disclosure=right.search(/(?:披露|公布|公告).{0,12}(?:净值|报告)|(?:估值日|净值计算日)/);
+ if(disclosure>=0&&(action<0||disclosure<action))return false;
+ if(/开放|办理(?:参与|退出|申购|赎回)|(?:参与|申购)(?:和|及)(?:退出|赎回)/.test(local))return true;
+ const previous=text.slice(0,start).trim().split(/[。；;\n]/).at(-1)||'';
+ return /^(?:\d+[.、]\s*)?(?:开放日|开放期|开放安排|参与和退出|参与|申购|赎回|退出)(?:安排|日期)?\s*[:：]?\s*$/.test(previous);
+}
 const FEE_LABELS=[['trust_total_fee',/固定信托管理费|固定管理费/],['trust_manager_fee',/受托人信托报酬|(?:收取)?信托管理费|受托人报酬/],['floating_advisor_fee',/浮动投资顾问费/],['floating_sales_fee',/浮动销售服务费/],['advisor_fee',/固定投资顾问费|投资顾问费/],['sales_fee',/固定销售服务费|销售服务费/],['custody_fee',/托管费(?:率)?|保管费(?:率)?/],['management_fee',/管理费(?:率)?/],['redemption_fee',/赎回费(?:率)?|退出费(?:率)?/],['subscription_fee',/认[、/／]?申购(?:费|费用)|认购(?:费|费用)|申购(?:费|费用)|参与费(?:率)?/]];
 const AGGREGATE_LAYERS=/(?:两层|双层|上下两层).{0,8}(?:合计|总计|总费|综合)|(?:合计|总计).{0,5}(?:两层|双层)/;
 function feeTokens(text,baseKey,trust){
@@ -166,6 +175,13 @@ function resolveAtom(key,label,rs,scope,target,extra={}){
  }
  if(key==='product_type')return pick(findMatches(allowed,/(?:归属于|类型为|类别为|产品类型[：:|]?|本计划为|集合计划为|类型\s*[:：]?)[【\s]*((?:固定收益|混合|权益|商品及金融衍生品)类)/g));
  if(key==='product_code')return pick(findMatches(allowed,/(?:产品代码|产品编码)[：:|\s【（(]*([A-Z0-9]{5,25})/g));
+ if(key==='opening_monthly_weekday'){
+  const candidates=[];let unsupported=false;
+  for(const b of allowed){
+   for(const pattern of monthlyWeekdayPatterns(b.text)){if(!monthlyOpeningContext(b.text,pattern))continue;if(pattern.warning)unsupported=true;else candidates.push({value:pattern.value,evidence:[quote(b.base||b,b.text)]});}
+  }
+  return unsupported?{status:'pending',value:null,evidence:candidates.flatMap(c=>c.evidence),reason:'合同存在尚无法完整对应的月内开放安排，保留模板原值待核。'}:pick(candidates,'合同未明确同口径的月内第几个星期开放安排，保留模板原值待核。');
+ }
  if(key==='opening_weekday')return pick(findMatches(allowed,/(?:每周|每星期)([一二三四五六日天])(?:[、和及][一二三四五六日天])?/g,m=>m[1],b=>/开放日|开放安排|开放期/.test(b.text)&&!/披露|估值/.test(b.text)));
  if(key==='opening_monthday')return pick(findMatches(allowed,/(?:每个?自然月|每月)(?:的)?[【\s]*(\d{1,2})[】\s]*日/g,m=>m[1],b=>/开放/.test(b.text)));
  if(key==='opening_cycle')return pick(findMatches(allowed,/(?:每满|每隔|每)(\d+)个?月(?:之对日|的?对应日|开放)/g));
@@ -336,6 +352,7 @@ function atomsFor(label,text,target,fieldText=text){
   return atoms;
  }
  if(['opening','lockup','duration'].includes(key)){
+  for(const pattern of monthlyWeekdayPatterns(text))atoms.push({key:'opening_monthly_weekday',start:pattern.start,before:pattern.before,value:pattern.value,monthlyPattern:pattern,...(pattern.warning?{manualReviewReason:pattern.warning}:{})});
   const rules=[['opening_weekday',/(?:每周|每星期)([一二三四五六日天])/g],['opening_monthday',/(?:每个?自然月|每月)(?:的)?[【\s]*(\d{1,2})[】\s]*日/g],['opening_cycle',/(?:每满|每隔|每)(\d+)个?月(?:之对日|的?对应日|开放)/g],['opening_days',/(?:每个开放期开放|连续开放)[【\s]*([一二两三四五六七八九十\d]+)[】\s]*(?:个)?交易日/g],['lockup_days',/(?:持有时间不得少于|持有期(?:不少于|为)|之后的第|封闭期(?:为|是))[【\s]*(\d+)[】\s]*(?:个)?(?:自然日|天)/g]];
   for(const [k,re]of rules)for(const m of text.matchAll(re))add(k,m,m[1],m[1]);
   if(key==='duration')for(const m of text.matchAll(/(\d+)年/g))add('duration_years',m,m[1]);
@@ -383,6 +400,11 @@ function addOccurrence(task,m,field,p,atom,resolution){
  const factKey=(atom.key==='risk_description'?'risk_rating':atom.key)+'|'+JSON.stringify(scope);
  const factLabel=atom.key.startsWith('performance_ratio_')?'业绩报酬提成比例（第'+atom.key.match(/\d+$/)[0]+'档）':/^performance_R\d/.test(atom.key)?'业绩报酬基准 R'+atom.key.match(/\d+$/)[0]:field.label;
  let f=task._factMap.get(factKey);if(!f){f={id:'fact-'+(task.facts.length+1),key:atom.key,label:factLabel,value:resolution.value,status:resolution.status,evidence:resolution.evidence||[],scope,occurrences:[],reason:resolution.reason,reasonType:resolution.reasonType||(resolution.status==='verified'?'confirmed':'needs_review')};task.facts.push(f);task._factMap.set(factKey,f);}
+ else if(atom.key==='opening_monthly_weekday'&&resolution.status!=='verified'&&f.status==='verified'){
+  Object.assign(f,{value:null,status:resolution.status,reason:resolution.reason,reasonType:'needs_review'});
+  for(const material of task.materials)material.operations=material.operations.filter(o=>!o.factIds?.includes(f.id));
+  for(const record of task._records.filter(r=>r.f===f))renderRecord(record);
+ }
  f.occurrences.push({materialId:m.materialId,paragraphId:p.id,fieldId:field.id});field.factIds.push(f.id);
  const record={m,field,p,atom,f};task._records.push(record);renderRecord(record);
 }
@@ -390,6 +412,12 @@ function operationId(m){m._operationSequence=(m._operationSequence||0)+1;return 
 function renderRecord({m,field,p,atom,f,userRenderValue}){
  const common={paragraphId:p.id,part:p.part,index:p.index,reason:f.reason,factIds:[f.id]};
  if(f.userConfirmed)return;
+ if(atom.key==='opening_monthly_weekday'){
+  const result=f.status==='verified'?monthlyWeekdayChanges(atom.monthlyPattern,String(f.value)):{changes:[]};
+  if(f.status==='verified'&&!result.warning){for(const diff of result.changes)m.operations.push({...common,id:operationId(m),kind:'replace',start:atom.start+diff.start,before:diff.before,after:diff.after});}
+  else{const anchors=atom.monthlyPattern.tokens||[{start:0,before:atom.before}];for(const a of anchors){m.operations.push({...common,id:operationId(m),kind:'highlight',start:atom.start+a.start,before:a.before,color:'yellow'});m.operations.push({...common,id:operationId(m),kind:'comment',start:atom.start+a.start,before:a.before});}}
+  return;
+ }
  if(f.status==='verified'){
   let after=String(userRenderValue??atom.renderValue??f.value??'');if(atom.key==='product_name')after=nameStyle(after,atom.before);if(atom.key==='risk_description')after=({R1:'低风险',R2:'中低风险',R3:'中风险',R4:'中高风险',R5:'高风险'})[after]||after;
   if(atom.key==='opening_days'&&/^[一二两三四五六七八九十]$/.test(atom.before))after=Object.entries({一:1,二:2,三:3,四:4,五:5,六:6,七:7,八:8,九:9,十:10}).find(([,v])=>v===Number(after))?.[0]||after;
@@ -419,6 +447,7 @@ function reviewParagraph(task,m,field,p,rs){
   }else if(atom.key==='risk_description')resolution=resolveAtom('risk_rating',field.label,rs,atom.scope,task.target);
   else if(atom.key==='opening_announced_date')resolution=pendingAnnouncement();
   else resolution=resolveAtom(atom.key,field.label,rs,atom.scope||scopeFor(field.label,p.text,atom.start),task.target,{original:atom.before});
+  if(atom.key==='opening_monthly_weekday'&&resolution.status==='verified'){const alignment=monthlyWeekdayChanges(atom.monthlyPattern,resolution.value);if(alignment.warning)resolution={...resolution,status:'pending',value:null,reasonType:'needs_review',reason:alignment.warning};}
   if(aggregate&&!(resolution.status==='verified'&&resolution.evidence?.length&&resolution.evidence.every(e=>AGGREGATE_LAYERS.test(e.quote))))resolution={...resolution,status:'pending',value:null,reasonType:'needs_review',reason:'模板列示跨层合计费用，尚未取得同口径的合同依据，保留原值待核。'};
   // Retain a documented successor organization alias in the template.
   if(atom.key==='manager'&&resolution.status==='verified'&&!equivalent(atom.before,resolution.value)){
@@ -479,6 +508,7 @@ function validateSupplement(fact,value,task){
  if(fact.key.endsWith('_fee')||fact.key.startsWith('performance_')||fact.key==='benchmark'){if(!/^\d+(?:\.\d+)?\s*[%％]?$/.test(raw)||number(raw)>100)throw new Error('请填写0至100之间的费率数字，可带百分号。');accepted=raw.replace(/[％\s]/g,'').replace(/%$/,'')+'%';}
  else if(/^(?:minimum_amount|additional_amount|opening_cycle|opening_days|opening_monthday|lockup_days|duration_years)$/.test(fact.key)){const m=raw.match(/^(\d+(?:\.\d+)?)\s*(?:万元?|年|天|个月|个交易日|交易日|日)?$/);if(!m)throw new Error('请填写有效数字，可附相应单位。');if(!/amount/.test(fact.key)&&!Number.isInteger(Number(m[1])))throw new Error('日期、天数及周期请填写整数。');accepted=m[1];if(fact.key==='opening_monthday'&&(Number(accepted)<1||Number(accepted)>31))throw new Error('每月日期应为1至31日。');}
  else if(fact.key==='opening_weekday'){if(!/^(?:周|星期|每周)?[一二三四五六日天]$/.test(raw))throw new Error('请填写星期几，例如周四。');accepted=raw.at(-1);}
+ else if(fact.key==='opening_monthly_weekday'){accepted=parseMonthlyWeekdayInput(raw);for(const r of task._records.filter(r=>r.f===fact)){const alignment=monthlyWeekdayChanges(r.atom.monthlyPattern,accepted);if(alignment.warning)throw new Error(alignment.warning);}}
  else if(fact.key==='product_code'&&!/^[A-Za-z0-9][A-Za-z0-9_.-]{4,24}$/.test(raw))throw new Error('请填写5至25位产品代码，仅含字母、数字或代码连接符。');
  else if(fact.key==='risk_rating'){const map={'低风险':'R1','中低风险':'R2','中风险':'R3','中高风险':'R4','高风险':'R5'};accepted=map[raw]||raw.toUpperCase();if(!/^R[1-5]$/.test(accepted))throw new Error('请填写R1至R5或相应风险等级名称。');}
  else if(fact.key==='opening_announced_date')accepted=parseDateInput(raw,Number(task.month.slice(0,4))).value;

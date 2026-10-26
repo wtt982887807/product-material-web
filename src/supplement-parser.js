@@ -1,3 +1,4 @@
+import {monthlyWeekdayPatterns,parseMonthlyWeekdayInput} from './monthly-weekday.js?v=20261026-monthly';
 const pct=String.raw`\d+(?:\.\d+)?\s*[%％]`;
 const percent=s=>`${Number(String(s).replace(/[^\d.]/g,''))}%`;
 const clean=s=>String(s??'').normalize('NFKC').trim();
@@ -69,6 +70,7 @@ export function parsePerformanceInput(value){
 }
 export function parseOpeningInput(value){
  const text=clean(value),out={};
- for(const [key,re]of [['opening_cycle',/(?:每满|每隔|每|周期(?:为|是)?[:：]?)\s*(\d+)个?月/],['opening_days',/(?:连续开放|开放(?:期)?(?:为|是|开放)?[:：]?)\s*(\d+)个?交易日/],['opening_monthday',/每月(?:的)?\s*(\d+)日/],['opening_weekday',/(?:每周|每星期|周|星期)([一二三四五六日天])/]]){const m=text.match(re);if(m)out[key]=m[1];}
+ const monthly=monthlyWeekdayPatterns(text);if(monthly.length)out.opening_monthly_weekday=parseMonthlyWeekdayInput(text);
+ for(const [key,re]of [['opening_cycle',/(?:每满|每隔|每|周期(?:为|是)?[:：]?)\s*(\d+)个?月/],['opening_days',/(?:连续开放|开放(?:期)?(?:为|是|开放)?[:：]?)\s*(\d+)个?交易日/],['opening_monthday',/每月(?:的)?\s*(\d+)日/],['opening_weekday',/(?:每周|每星期|周|星期)([一二三四五六日天])/]]){if(key==='opening_weekday'&&monthly.length)continue;const m=text.match(re);if(m)out[key]=m[1];}
  return out;
 }
