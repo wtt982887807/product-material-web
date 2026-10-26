@@ -128,11 +128,32 @@ function renderFact(fact){
 function isConfirmed(f){return f.userConfirmed===true||f.source==='user_confirmation';}
 function discardSupplementPreview(){state.supplementPreview=null;$('supplement-preview').hidden=true;}
 function reviewEdited(message){clearDownloads();discardSupplementPreview();$('error-panel').hidden=true;changeStep('review');renderReview();$('supplement-notice').textContent=message;$('supplement-notice').hidden=false;}
-function groups(){return state.reviewApi?.getSupplementGroups?state.reviewApi.getSupplementGroups(state.task):state.task.facts.map(f=>({id:f.id,label:f.label,kind:'text',factIds:[f.id],status:f.status}));}
+function groups(){
+ const base=state.reviewApi?.getSupplementGroups?state.reviewApi.getSupplementGroups(state.task):state.task.facts.map(f=>({id:f.id,label:f.label,kind:'text',factIds:[f.id],status:f.status}));
+ const cards=new Map(),normalize=s=>String(s??'').normalize('NFKC').replace(/[\s·•,，。;；:：、【】\[\]"“”'‘’]/g,'');
+ for(const group of base){
+  if(group.kind!=='text'){cards.set(group.id,group);continue;}
+  const fs=groupFacts(group),scope={...group.scope};
+  // Only a condition that literally represents the original wording is ignored
+  // for display. Shares, channels and semantic conditions stay independent.
+  if(scope.condition&&fs.every(f=>(state.task._records||[]).some(r=>r.f===f&&normalize(r.atom.before)===scope.condition)))delete scope.condition;
+  const identity=JSON.stringify([group.label,[...new Set(fs.map(f=>f.key))].sort(),Object.keys(scope).sort().map(k=>[k,scope[k]])]);
+  const existing=cards.get(identity);
+  if(existing){existing.members.push(group);existing.factIds.push(...group.factIds);}
+  else cards.set(identity,{...group,id:'review-'+group.id,scope,factIds:[...group.factIds],members:[group]});
+ }
+ return [...cards.values()].map(g=>g.members?.length===1?g.members[0]:g);
+}
 function groupFacts(group){return group.factIds.map(id=>state.task.facts.find(f=>f.id===id)).filter(Boolean);}
 function scopedGroupLabel(group){const s=group.scope||{},parts=[s.share?s.share+'类份额':'',s.channel,s.issuer==='distributor'?'代销口径':''].filter(Boolean);return group.label+(parts.length?' · '+parts.join(' · '):'');}
 function readableFact(f){const labels={opening_cycle:['开放周期','个月'],opening_days:['开放天数','个交易日'],opening_monthday:['每月开放日','日'],opening_weekday:['开放星期',''],opening_monthly_weekday:['月内开放安排','']};const mapped=labels[f.key];if(mapped)return mapped[0]+'：'+f.value+mapped[1];if(f.key==='opening_announced_date'){const parts=(f.scope?.condition||'').split('|'),label=({participation_exit:'参与和退出',participation_only:'仅参与'})[parts[3]]||({opening:'本次开放日',sale:'本次开放日',reservation:'本次预约日'})[parts[0]]||'本次开放日';return label+'：'+f.value;}return f.label+'：'+f.value;}
 const examples={date:'2026年11月23日至2026年11月27日',performance:'2.0%＜年化收益率≤3.0%，计提20%；年化收益率＞3.0%，计提40%',benchmark:'2.25%',code:'000123',opening:'每满18个月，开放5个交易日',text:'填写本次确认使用的内容'};
+function supplementForm(group,label){
+ const form=el('form','supplement'),input=el(group.kind==='performance'?'textarea':'input');input.placeholder=examples[group.kind]||examples.text;input.setAttribute('aria-label','补充'+label);input.addEventListener('input',discardSupplementPreview);if(group.kind==='performance')input.rows=2;
+ const button=el('button','','预览补充');button.type='submit';form.append(input,button);
+ form.onsubmit=e=>{e.preventDefault();if(state.busy||!input.value.trim())return;try{showSupplementPreview(state.reviewApi.previewSupplement(state.task,group.id,input.value),{label});}catch(error){showError(error);}};
+ return form;
+}
 function renderGroup(group){
  const fs=groupFacts(group),pending=fs.some(f=>f.status!=='verified'),confirmed=fs.some(isConfirmed),changed=fs.some(factChanged),status=pending?'pending':confirmed?'confirmed':changed?'changed':'verified';
  const label=scopedGroupLabel(group),row=el('article','fact-row');row.dataset.groupId=group.id;const head=el('div','fact-heading');head.append(el('strong','',label),el('span','badge '+status,({pending:'保留待核',confirmed:'已确认无误',changed:'已修改',verified:'原样保留'})[status]));const count=new Set(fs.flatMap(f=>(f.occurrences||[]).map(o=>o.materialId+'|'+o.paragraphId))).size;head.append(el('small','',`关联 ${count} 处`));row.append(head);
@@ -140,9 +161,18 @@ function renderGroup(group){
  const reasons=[...new Set(fs.map(f=>f.reason).filter(Boolean))];for(const reason of reasons)row.append(el('p','fact-reason',reason));
  const details=el('details');details.append(el('summary','','查看依据与物料位置'));const seenEvidence=new Set();for(const f of fs)for(const e of(f.evidence||[])){const k=e.blockId+'|'+e.quote;if(seenEvidence.has(k))continue;seenEvidence.add(k);details.append(el('p','',sourceTitle(e)),el('blockquote','',e.quote||''));}
  const factIds=new Set(group.factIds);for(const m of state.task.materials)for(const field of m.fields.filter(f=>f.factIds?.some(id=>factIds.has(id)))){const occurrence=el('div','occurrence');occurrence.append(el('strong','',m.template.name+' · '+field.label));if(field.before!==field.after){const b=el('p'),a=el('p');b.append(el('del','',field.before));a.append(el('ins','',field.after??field.before));occurrence.append(b,a);}else occurrence.append(el('p','',field.before));details.append(occurrence);}row.append(details);
- if(pending||['date','performance','benchmark','code','opening'].includes(group.kind)){
-  const form=el('form','supplement'),input=el(group.kind==='performance'?'textarea':'input');input.placeholder=examples[group.kind]||examples.text;input.setAttribute('aria-label','补充'+label);input.addEventListener('input',discardSupplementPreview);if(input.tagName==='TEXTAREA'||group.kind==='performance')input.rows=2;const button=el('button','','预览补充');button.type='submit';form.append(input,button);form.onsubmit=e=>{e.preventDefault();if(state.busy||!input.value.trim())return;try{showSupplementPreview(state.reviewApi.previewSupplement(state.task,group.id,input.value),{label});}catch(error){showError(error);}};row.append(form);
- }
+ if(group.members?.length>1&&pending){
+  const edits=el('details');edits.append(el('summary','','分别补充原文'),el('p','supplement-note','各处原话术分别保留。补充只更新所选原文，不覆盖其他段落。'));
+  for(const [i,member]of group.members.entries()){
+   if(!groupFacts(member).some(f=>f.status!=='verified'))continue;
+   const records=(state.task._records||[]).filter(r=>member.factIds.includes(r.f.id));
+   const originals=records.length?records.map(r=>({name:r.m.template.name,text:r.atom.before})):state.task.materials.flatMap(m=>m.fields.filter(f=>f.factIds?.some(id=>member.factIds.includes(id))).map(f=>({name:m.template.name,text:f.before})));
+   edits.append(el('p','fact-reason','原文 '+(i+1)+' · '+[...new Set(originals.map(o=>o.name))].join('、')));
+   for(const text of new Set(originals.map(o=>o.text)))edits.append(el('p','',text));
+   edits.append(supplementForm(member,label+' · 原文 '+(i+1)));
+  }
+  row.append(edits);
+ }else if(!group.members&&(pending||['date','performance','benchmark','code','opening'].includes(group.kind)))row.append(supplementForm(group,label));
  if(pending||confirmed){const actions=el('div','fact-actions'),confirm=el('button','text-button',confirmed&&!pending?'撤销确认':'确认无误');confirm.type='button';confirm.setAttribute('aria-label',(confirmed&&!pending?'撤销确认':'确认无误')+'：'+label);confirm.onclick=()=>{if(state.busy)return;try{const undo=confirmed&&!pending;state.task=state.reviewApi.confirmFacts(state.task,group.factIds,!undo);reviewEdited(undo?'已撤销确认，对应原值恢复待核标记。':'已确认原值无误。PPT 和海报不再添加对应待核标黄或批注，Word 已有审阅修订继续保留。');}catch(error){showError(error);}};actions.append(confirm,el('span','','确认原值；保留 Word 本轮修订'));row.append(actions);}
  return row;
 }

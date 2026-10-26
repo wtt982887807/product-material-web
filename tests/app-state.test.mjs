@@ -129,6 +129,42 @@ function appendSupplementFacts(app){
 }
 const buttonIn=(element,text)=>descendants(element).find(n=>n.tagName==='button'&&n.textContent===text);
 
+function narrativeTask(contract,templates,options){
+ const rows=[['产品名称','晨星稳健3号集合资产管理计划'],['投资范围','本计划投资债券、货币市场工具。'],['投资范围','本计划可投资公募基金。'],['投资比例','固定收益资产占80%以上。'],['投资比例','权益类资产不超过20%。'],['A类份额投资范围','本份额投资债券。'],['B类份额投资范围','本份额投资基金。']];
+ const t={...templates[0],id:'narrative',rows:[],paragraphs:[],slides:[],warnings:[]};
+ for(const [i,[label,value]]of rows.entries()){
+  const ids=['l'+i,'v'+i];[label,value].forEach((text,cellIndex)=>t.paragraphs.push({id:ids[cellIndex],text,part:'word/document.xml',page:1,index:i*2+cellIndex,tableId:'t',rowIndex:i,cellIndex}));
+  t.rows.push({id:'r'+i,label,value,part:'word/document.xml',page:1,tableId:'t',rowIndex:i,paragraphIds:ids,cells:[{text:label,paragraphIds:[ids[0]]},{text:value,paragraphIds:[ids[1]]}]});
+ }
+ return reviewEngine.analyzeMaterials({...contract,warnings:[],blocks:[{id:'name',text:'产品名称：晨星稳健9号集合资产管理计划'}]},[t],options);
+}
+test('narrative review cards combine display and confirmation while keeping each original supplement separate',async()=>{
+ const app=createApp({taskFactory:narrativeTask});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ const cards=()=>app.elements.get('facts-list').children.filter(n=>n.tagName==='article');
+ const card=label=>cards().find(n=>descendants(n).some(c=>c.tagName==='strong'&&c.textContent===label));
+ for(const label of ['投资范围','投资比例'])assert.equal(cards().filter(n=>descendants(n).some(c=>c.tagName==='strong'&&c.textContent===label)).length,1);
+ assert.ok(card('A类份额投资范围 · A类份额'));assert.ok(card('B类份额投资范围 · B类份额'));
+ const task=app.state.task,range=task.facts.filter(f=>f.key==='investment_scope'&&!f.scope.share);assert.equal(range.length,2);
+ const rangeCard=card('投资范围'),forms=descendants(rangeCard).filter(n=>n.tagName==='form');assert.equal(forms.length,2);
+ for(const original of ['本计划投资债券、货币市场工具。','本计划可投资公募基金。'])assert.ok(descendants(rangeCard).some(n=>n.textContent===original));
+ const firstForm=forms[0],input=firstForm.children.find(n=>n.tagName==='input');input.value='本计划主要投资债券。';
+ firstForm.onsubmit({preventDefault(){}});await buttonIn(app.elements.get('supplement-preview'),'确认并应用补充').click();
+ assert.equal(range[0].value,'本计划主要投资债券。');assert.equal(range[1].value,null);assert.equal(range[1].status,'pending');
+ const material=task.materials[0];assert.ok(material.operations.some(o=>o.kind==='replace'&&o.paragraphId==='v1'));assert.ok(!material.operations.some(o=>o.kind==='replace'&&o.paragraphId==='v2'));
+ await buttonIn(card('投资范围'),'确认无误').click();assert.equal(range[1].userConfirmed,true);assert.ok(!range[0].userConfirmed);
+ await buttonIn(card('投资范围'),'撤销确认').click();assert.equal(range[1].status,'pending');assert.equal(range[0].value,'本计划主要投资债券。');
+ assert.ok(task.facts.filter(f=>f.key==='investment_ratios').every(f=>f.status==='pending'));
+});
+
+test('review display keeps same-label channel share and semantic conditions separate',async()=>{
+ const app=createApp({taskFactory:narrativeTask});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ const task=app.state.task,fs=task.facts.filter(f=>f.key==='investment_scope');
+ const count=()=>app.elements.get('facts-list').children.filter(n=>n.tagName==='article'&&descendants(n).some(c=>c.tagName==='strong'&&c.textContent.startsWith('投资范围'))).length;
+ for(const f of fs)f.label='投资范围';app.renderReview();assert.equal(count(),3,'common group plus A and B');
+ const common=fs.filter(f=>!f.scope.share);common[0].scope.channel='银行甲';common[1].scope.channel='银行乙';app.renderReview();assert.equal(count(),4);
+ for(const f of common)f.scope.channel='';common[0].scope.condition='aggregate_layers';app.renderReview();assert.equal(count(),4,'semantic conditions must not disappear');
+});
+
 test('four independent rows exclude contract opening rules and apply only the parsed row after confirmation',async()=>{
  const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();appendSupplementFacts(app);
  assert.equal(descendants(app.elements.get('facts-list')).filter(n=>n.tagName==='strong'&&n.textContent==='本次开放日').length,1);
