@@ -47,6 +47,53 @@ test('a repeated hurdle stated after its percentage is updated with the main sta
  engine.applySupplement(t,engine.previewPerformanceNumbers(t,{mode:'single',threshold1:'2.5',ratio1:'60'}));
  assert.equal(rendered(t,'a','av1'),original.replaceAll('2.7%','2.5%'));
 });
+
+test('one performance card updates first-period standards in prose and parentheses across all materials',()=>{
+ const original='业绩报酬计提标准由管理人在每一开放期在管理人网站上予以公告。当年化收益率＞业绩报酬计提标准2.8%时，本集合计划对超过业绩报酬计提标准的收益部分提取60%的业绩报酬（2.8%为首期业绩报酬计提标准）。业绩报酬计提日为计划分红权益登记日、投资者退出日和计划终止日。计提基准不构成收益承诺，实际收益可能低于该基准。';
+ const t=task([template('word',[['业绩报酬',original]]),template('ppt',[['业绩报酬',original]],'pptx'),template('海报',[['业绩报酬',original]],'pptx')]);
+ const groups=engine.getSupplementGroups(t).filter(g=>g.label.includes('业绩报酬'));
+ assert.equal(groups.length,1);assert.equal(groups[0].label,'业绩报酬');
+ assert.ok(!t.facts.some(f=>f.key==='custom:performance_parameter'));
+ engine.applySupplement(t,engine.previewPerformanceNumbers(t,{mode:'single',threshold1:'2.5',ratio1:'60'}));
+ for(const id of ['word','ppt','海报'])assert.equal(rendered(t,id,id+'v1'),original.replaceAll('2.8%','2.5%'));
+ assert.equal(engine.getSupplementGroups(t).find(g=>g.kind==='performance').status,'verified');
+});
+
+test('unclassified performance percentages share the card but cannot be overwritten or silently confirmed',()=>{
+ const original='超过业绩报酬计提标准2.8%的部分提取60%作为业绩报酬。另列参数5.00%，适用口径以公告为准。';
+ const t=task([template('a',[['业绩报酬',original]])]);
+ const groups=engine.getSupplementGroups(t).filter(g=>g.label.includes('业绩报酬'));
+ assert.equal(groups.length,1);assert.equal(groups[0].label,'业绩报酬');
+ const unknown=t.facts.find(f=>f.key==='custom:performance_parameter');assert.ok(unknown);
+ const preview=engine.previewPerformanceNumbers(t,{mode:'single',threshold1:'2.5',ratio1:'60'});
+ assert.match(preview.warnings.join(''),/含义|口径|未明确/);assert.ok(preview.updates.every(u=>u.factId!==unknown.id));
+ engine.applySupplement(t,preview);
+ assert.equal(rendered(t,'a','av1'),original.replace('2.8%','2.5%'));assert.equal(unknown.status,'pending');
+ assert.equal(engine.getSupplementGroups(t).find(g=>g.kind==='performance').status,'pending');
+ assert.ok(t.materials[0].operations.some(o=>o.kind==='highlight'&&o.before==='5.00%'));
+ engine.confirmFacts(t,groups[0].factIds);
+ assert.equal(rendered(t,'a','av1'),original.replace('2.8%','2.5%'));
+ assert.ok(!t.materials[0].operations.some(o=>o.kind==='highlight'&&o.before==='5.00%'));
+ engine.confirmFacts(t,groups[0].factIds,false);
+ assert.equal(rendered(t,'a','av1'),original.replace('2.8%','2.5%'));assert.equal(unknown.status,'pending');
+});
+
+test('a fee card with only ambiguous percentages offers review without guessing numeric roles',()=>{
+ const t=task([template('a',[['业绩报酬','参数5.00%，具体口径以公告为准。']])]);
+ const before=JSON.stringify(t.facts),preview=engine.previewPerformanceNumbers(t,{mode:'single',threshold1:'2.5',ratio1:'60'});
+ assert.equal(preview.updates.length,0);assert.match(preview.warnings.join(''),/含义|口径|未明确/);assert.equal(JSON.stringify(t.facts),before);
+});
+
+test('unclassified fee values remain separated by share scope and historical values are not current standards',()=>{
+ const original='超过业绩报酬计提标准2.8%的部分提取60%作为业绩报酬。（5.00%为上期业绩报酬计提标准）';
+ const t=task([template('a',[['A类份额业绩报酬',original],['B类份额业绩报酬',original]])]);
+ const groups=engine.getSupplementGroups(t).filter(g=>g.kind==='performance');assert.equal(groups.length,2);
+ assert.deepEqual(groups.map(g=>g.scope.share).sort(),['A','B']);
+ const preview=engine.previewPerformanceNumbers(t,{mode:'single',threshold1:'2.5',ratio1:'60'});
+ assert.equal(preview.updates.length,0);assert.match(preview.warnings.join(''),/多个份额/);
+ const a=groups.find(g=>g.scope.share==='A');engine.applySupplement(t,engine.previewSupplement(t,a.id,'超过业绩报酬计提基准2.5%的部分提取60%作为业绩报酬'));
+ assert.equal(rendered(t,'a','av1'),original.replace('2.8%','2.5%'));assert.equal(rendered(t,'a','av2'),original);
+});
 test('numeric performance input rejects incomplete invalid or structurally mismatched values atomically',()=>{
  const single=task([template('a',[['业绩报酬','超过业绩报酬计提标准2.8%的部分提取60%。']])]),tiered=task([template('b',[['业绩报酬','1%＜年化收益率≤4%时计提5%；年化收益率＞4%时计提50%。']])]);
  for(const values of [{mode:'single',threshold1:'',ratio1:'60'},{mode:'single',threshold1:'2.5',ratio1:'-1'},{mode:'single',threshold1:'2.5',ratio1:'101'},{mode:'tiered',threshold1:'3',threshold2:'2',ratio1:'20',ratio2:'40'}])assert.throws(()=>engine.previewPerformanceNumbers(single,values),/填写|0至100|小于/);
