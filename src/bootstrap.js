@@ -35,7 +35,7 @@ async function prepareIsolation(page,moduleUrl,timeoutMs,inputs){
 }
 
 /** Prepare browser isolation before the application accepts any local files. */
-export async function startApplication({window:page=globalThis.window,moduleUrl=import.meta.url,loadApp=()=>import('./app.js?v=20261026-contract-opening'),timeoutMs=5000}={}){
+export async function startApplication({window:page=globalThis.window,moduleUrl=import.meta.url,loadApp=()=>import('./app.js?v=20261026-fee-date'),timeoutMs=5000}={}){
   const document=page.document;
   const inputs=[...document.querySelectorAll('input[type="file"]')];
   const disabled=inputs.map(input=>input.disabled);

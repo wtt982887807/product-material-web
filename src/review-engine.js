@@ -105,7 +105,7 @@ function performanceTokens(text){
   const left=text.slice(Math.max(0,m.index-150),m.index),right=text.slice(m.index+m[0].length,m.index+m[0].length+40);
   const column=left.split('\n').at(-1),tablePayout=/[\t|]\s*$/.test(column)&&/[RＲF]|收益率/.test(column)&&/[＜≤<>＞≥]/.test(column);
   const payout=tablePayout||/(?:提取|计提|收取|提成|×|乘以|按)[【\s]*$/.test(left)||/^(?:的|比例的).{0,6}(?:业绩报酬|浮动服务费)|^(?:计提|提取)/.test(right);
-  const hurdle=!payout&&(/(?:[＜≤<>＞≥=＝]|高于|低于|超过|超出|大于|小于|(?:基准|标准)(?:为|是|[:：])?|R[12](?:为|是)|收益率(?:为|是)?|年化)[【\s]*$/.test(left)||/^\s*[＜≤<>＞≥]/.test(right)||/^\s*(?:为|作为)(?:本期|本次)?(?:业绩报酬)?(?:计提)?(?:基准|标准)/.test(right)||/\d+(?:\.\d+)?%\s*[-—~～]\s*$/.test(left)||/^\s*[-—~～]\s*\d/.test(right)||/(?:[RＲF]|收益率)[-－]\s*$/.test(left));
+  const hurdle=!payout&&(/(?:[＜≤<>＞≥=＝]|高于|低于|超过|超出|大于|小于|(?:基准|标准)(?:为|是|[:：])?|R[12](?:为|是)|收益率(?:为|是)?|年化)[【\s]*$/.test(left)||/^\s*[＜≤<>＞≥]/.test(right)||/^\s*(?:为|作为)\s*(?:(?:本期|本次|首期|当期)\s*)?(?:业绩报酬\s*)?(?:计提\s*)?(?:基准|标准)/.test(right)||/\d+(?:\.\d+)?%\s*[-—~～]\s*$/.test(left)||/^\s*[-—~～]\s*\d/.test(right)||/(?:[RＲF]|收益率)[-－]\s*$/.test(left));
   tokens.push({start:m.index,before:m[0],value:`${number(m[0])}%`,role:payout?'ratio':hurdle?'threshold':'unknown'});
  }
  return tokens;
@@ -250,8 +250,8 @@ const NONCURRENT_DATE=/历史|过往|上次|上一期|去年|成立(?:日期|时
 function pendingAnnouncement(){return{status:'pending',value:null,evidence:[],reasonType:'contract_missing',reason:'该具体开售/开放日期需当期公告支持，合同周期不能确认；保留原日期，数字标黄待核。'};}
 function announcedDates(text,label=''){
  // Dates are spans in the template, never dates inferred from a contract cycle.
- const point='(?:\\d{4}\\s*[年/-]\\s*)?\\d{1,2}\\s*[月/-]\\s*\\d{1,2}日?';
- const re=new RegExp('(?<!\\d)'+point+'(?:\\s*[-—–~～至到]\\s*(?:'+point+'|\\d{1,2}日?))?(?!\\d)','g');
+ const point='(?:\\d{4}\\s*[年/.-]\\s*)?\\d{1,2}\\s*[月/.-]\\s*\\d{1,2}日?';
+ const re=new RegExp('(?<![\\d.])'+point+'(?:\\s*[-—–~～至到]\\s*(?:'+point+'|\\d{1,2}日?))?(?![\\d.%％])','g');
  const atoms=[];
  for(const m of text.matchAll(re)){
   const left=text.slice(0,m.index).split(/[。；;\n]/).at(-1),right=text.slice(m.index+m[0].length).split(/[。；;\n]/)[0];
@@ -262,7 +262,7 @@ function announcedDates(text,label=''){
   const role=/截止|结束|终止|最后/.test(roleText)?'end':/起始|开始|首个|首日/.test(roleText)?'start':'date';
   const event=/预约/.test(localContext)||/预约/.test(label)?'reservation':'opening';
   const dateWindow=/仅(?:开放)?参与|仅(?:开放)?申购/.test(localRight)?'participation_only':/(?:参与|申购)(?:和|及|与)(?:退出|赎回)/.test(localRight)?'participation_exit':'';
-  let parsed;try{parsed=parseDateInput(m[0],2000);}catch{}
+  let parsed;try{parsed=parseDateInput(m[0],2000);}catch{continue;}
   if(parsed?.end){
    atoms.push({key:'opening_announced_date',start:m.index,before:parsed.startText,value:parsed.startText,dateRole:'start',dateEvent:event,dateWindow,rangeEndpoint:true});
    atoms.push({key:'opening_announced_date',start:m.index+parsed.endOffset,before:parsed.endText,value:parsed.endText,dateRole:'end',dateEvent:event,dateWindow,rangeEndpoint:true});
@@ -537,7 +537,7 @@ function rebuildFacts(task,ids){
  const selected=new Set(ids);for(const m of task.materials)m.operations=m.operations.filter(o=>!o.factIds?.some(id=>selected.has(id)));
  for(const r of task._records)if(selected.has(r.f.id))renderRecord(r);return finalize(task);
 }
-const GROUP_KIND=f=>f.key==='opening_announced_date'?'date':f.key.startsWith('performance_')?'performance':f.key==='benchmark'?'benchmark':f.key==='product_code'?'code':/^opening(?:_|$)/.test(f.key)?'opening':'text';
+const GROUP_KIND=f=>f.key==='opening_announced_date'?'date':f.key.startsWith('performance_')||f.key==='custom:performance_parameter'?'performance':f.key==='benchmark'?'benchmark':f.key==='product_code'?'code':/^opening(?:_|$)/.test(f.key)?'opening':'text';
 export function getSupplementGroups(task){
  const groups=new Map();
  for(const f of task.facts){
@@ -548,13 +548,14 @@ export function getSupplementGroups(task){
    // Whole unmatched prose has its own meaning and must not share a replacement.
    identity=kind==='opening'&&f.key==='opening'?f.id:kind+'|'+JSON.stringify(scope);
   }
-  const group=groups.get(identity)||{id:'supplement-'+f.id,label:({performance:'业绩报酬分段',benchmark:'业绩比较基准',code:'产品代码',opening:'开放期',date:({sale:'本次开售日',reservation:'本次预约日',opening:'本次开放日'})[scope.event]||'本次开放日'})[kind]||f.label,kind,factIds:[],scope};
+  const group=groups.get(identity)||{id:'supplement-'+f.id,label:({performance:'业绩报酬',benchmark:'业绩比较基准',code:'产品代码',opening:'开放期',date:({sale:'本次开售日',reservation:'本次预约日',opening:'本次开放日'})[scope.event]||'本次开放日'})[kind]||f.label,kind,factIds:[],scope};
   group.factIds.push(f.id);groups.set(identity,group);
  }
  return [...groups.values()].map(g=>{const fs=g.factIds.map(id=>task.facts.find(f=>f.id===id));return{...g,status:fs.some(f=>f.status==='conflict')?'conflict':fs.some(f=>f.status!=='verified')?'pending':'verified',userConfirmed:fs.filter(f=>f.userConfirmed).length>0};});
 }
 function previewUpdates(task,facts,values,text,groupId){
  const updates=[],warnings=[];
+ if(facts.some(f=>f.key==='custom:performance_parameter'&&f.status!=='verified'))warnings.push('业绩报酬中仍有含义未明确的百分比，本次只更新已识别的计提基准和提取比例，其余原值保留待核。');
  for(const [key,value]of Object.entries(values)){
   const matches=facts.filter(f=>f.key===key);
   if(!matches.length){warnings.push('模板未识别到'+({benchmark:'业绩比较基准',product_code:'产品代码',opening_announced_date:'本次开放日期'}[key]||key)+'对应位置，未写入。');continue;}
@@ -664,7 +665,7 @@ export function previewSupplement(task,groupId,text){
  if(!Object.keys(values).length)throw new Error('请明确填写开放规则，例如每满18个月、连续开放5个交易日。');
  return previewUpdates(task,facts,values,raw,groupId);
 }
-// The five input rows are independent: never send untouched rows through bulk parsing.
+// Supplemental input rows are independent: never bulk-parse untouched rows.
 export function previewSupplementField(task,kind,text){
  const labels={date:'本次开放日',performance:'业绩报酬',benchmark:'业绩比较基准',code:'产品代码',opening:'开放期'};
  if(!labels[kind])throw new Error('请选择有效的补充要素。');
@@ -695,7 +696,8 @@ export function previewPerformanceNumbers(task,input={}){
  const groups=getSupplementGroups(task).filter(g=>g.kind==='performance');
  if(!groups.length)return{text,updates:[],warnings:['模板未识别到业绩报酬参数对应位置，未写入。']};
  if(groups.length>1)return{text,updates:[],warnings:['业绩报酬存在多个份额或口径，请在下方对应卡片分别填写。']};
- const group=groups[0],facts=task.facts.filter(f=>group.factIds.includes(f.id)),expected=unique(facts.map(f=>f.key)),given=Object.keys(values);
+ const group=groups[0],facts=task.facts.filter(f=>group.factIds.includes(f.id)),expected=unique(facts.filter(f=>f.key.startsWith('performance_')).map(f=>f.key)),given=Object.keys(values);
+ if(!expected.length)return{groupId:group.id,text,updates:[],warnings:['模板中的业绩报酬百分比含义尚未明确，未找到可对应的计提基准和提取比例，请在下方核对原值。']};
  if(expected.length!==given.length||expected.some(key=>!given.includes(key)))throw new Error('所选'+(mode==='single'?'单档':'分段')+'计提方式与模板已识别的档位不一致，请选择匹配的计提方式；本次未写入。');
  return previewUpdates(task,facts,values,text,group.id);
 }
