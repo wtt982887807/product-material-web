@@ -157,6 +157,30 @@ function incompleteAllocationTask(contract,templates,options){
  const texts=['产品名称：晨星稳健9号集合资产管理计划','3、投资比例',...allocationClauses,'上述投资比例应当按照穿透原则合并计算。','4、产品风险等级','本计划风险等级为R3。'];
  return reviewEngine.analyzeMaterials({...contract,blocks:texts.map((text,i)=>({id:'contract-'+i,text})),warnings:[]},[t],options);
 }
+function sectionCaseTask(contract,templates,options,{label,value,clauses}){
+ const t={...templates[0],id:'section-case',rows:[],paragraphs:[],slides:[],warnings:[]};
+ for(const [i,[key,text]]of [['产品名称','晨星稳健9号集合资产管理计划'],[label,value]].entries()){
+  const ids=['section-label'+i,'section-value'+i];[key,text].forEach((text,j)=>t.paragraphs.push({id:ids[j],text,index:i*2+j,part:'word/document.xml',page:1,tableId:'t',rowIndex:i,cellIndex:j}));
+  t.rows.push({id:'row'+i,label:key,value:text,tableId:'t',part:'word/document.xml',page:1,paragraphIds:ids,cells:[{text:key,paragraphIds:[ids[0]]},{text,paragraphIds:[ids[1]]}]});
+ }
+ return reviewEngine.analyzeMaterials({...contract,blocks:['产品名称：晨星稳健9号集合资产管理计划',...clauses].map((text,i)=>({id:'sc'+i,text})),warnings:[]},[t],options);
+}
+test('a missing strategy title has a working on-card preview, apply and undo',async()=>{
+ const app=createApp({taskFactory:(c,t,o)=>sectionCaseTask(c,t,o,{label:'投资策略',value:'1、资产配置策略；2、基金策略',clauses:['三、投资策略','1、资产配置策略','合理分配。','2、基金策略','优选基金。','3、境外结构化票据投资策略','谨慎管理票据风险。','四、投资限制']})});
+ await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ const card=()=>app.elements.get('facts-list').children.find(n=>descendants(n).some(c=>c.tagName==='strong'&&c.textContent==='投资策略'));
+ assert.ok(!descendants(card()).some(n=>n.tagName==='form'));await buttonIn(card(),'预览补齐策略标题').click();
+ assert.ok(descendants(card()).some(n=>n.textContent==='1、资产配置策略；2、基金策略；3、境外结构化票据投资策略'));
+ await buttonIn(card(),'确认补齐策略标题').click();assert.ok(app.state.task.materials[0].fields.find(f=>f.label==='投资策略').after.endsWith('3、境外结构化票据投资策略'));
+ assert.ok(descendants(card()).some(n=>n.textContent.includes('已采用合同策略标题')));await buttonIn(card(),'撤销采用合同内容').click();assert.equal(app.state.task.materials[0].fields.find(f=>f.label==='投资策略').after,'1、资产配置策略；2、基金策略');
+});
+test('large restriction differences give a concise complete-evidence cue instead of broken paragraph supplements',async()=>{
+ const clauses=['三、投资限制',...Array.from({length:15},(_,i)=>`（${i+1}）不得投资类别${i+1}的特定资产。`),'上述投资比例按照穿透原则合并计算。','四、风险揭示'];
+ const app=createApp({taskFactory:(c,t,o)=>sectionCaseTask(c,t,o,{label:'投资限制',value:'不得进行违规投资。',clauses})});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ const card=app.elements.get('facts-list').children.find(n=>descendants(n).some(c=>c.tagName==='strong'&&c.textContent==='投资限制')),nodes=descendants(card);
+ assert.ok(nodes.some(n=>/建议使用完整合同依据.*15项.*1段/.test(n.textContent)));assert.ok(!nodes.some(n=>n.tagName==='form'||n.textContent==='逐项查看合同与当前物料'));
+ const evidence=nodes.filter(n=>n.tagName==='blockquote').map(n=>n.textContent).join('\n');assert.ok(evidence.includes('（15）'));assert.ok(evidence.includes('穿透原则'));
+});
 
 test('complete section coverage stays visible even when every existing template clause is verified',async()=>{
  const app=createApp({taskFactory:incompleteAllocationTask});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
@@ -199,6 +223,32 @@ test('ratio adoption previews complete content, applies only on confirmation and
  await buttonIn(card(),'确认采用合同投资比例').click();assert.equal(Number(app.elements.get('count-pending').textContent),0);
  assert.ok(app.state.task.materials[0].fields.map(f=>f.after).join('\n').includes('境外投资'));
  await buttonIn(card(),'撤销采用合同内容').click();assert.equal(JSON.stringify(app.state.task.materials.map(m=>m.fields.map(f=>f.after))),before);
+});
+
+test('fixed monthly opening review shows full body evidence and supports preview, adoption and undo',async()=>{
+ const current='本集合计划自成立次日起每月1日、15日（如遇节假日顺延至下一个工作日）开放办理参与和退出业务。合同另有约定的，从其约定。除因根据合同变更或者展期等需要设立临时开放期供投资者退出外，本集合计划原则上不设立特别开放期。';
+ const old='本集合计划每月10号和25号开放办理参与和退出业务，非交易日顺延至下一个交易日；每笔份额持有期为180个自然日。';
+ const definition='指本集合计划办理参与和退出业务的期间。';
+ const app=createApp({taskFactory:(c,t,o)=>sectionCaseTask(c,t,o,{label:'开放期',value:old,clauses:['一、释义','开放期',definition,'四、封闭期、开放期','2、开放期：'+current]})});
+ await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ const card=()=>app.elements.get('facts-list').children.find(n=>descendants(n).some(c=>c.tagName==='strong'&&c.textContent==='开放期'));
+ const field=()=>app.state.task.materials[0].fields.find(f=>f.label==='开放期');
+ assert.equal(field().status,'pending');assert.equal(field().after,old);
+ const nodes=descendants(card()),evidence=nodes.filter(n=>n.tagName==='blockquote').map(n=>n.textContent).join('\n');
+ assert.ok(evidence.includes(current),'The full body rule, including the special-opening tail, remains inspectable');
+ assert.ok(!evidence.includes(definition),'The glossary definition is not offered as the actionable rule');
+ assert.ok(nodes.some(n=>n.className==='section-review-summary'&&/工作日/.test(n.textContent)&&/持有/.test(n.textContent)));
+ assert.ok(!nodes.some(n=>n.tagName==='form'));
+ const preview=buttonIn(card(),'预览采用合同开放期');assert.ok(preview);await preview.click();
+ assert.equal(field().after,old,'Preview does not write the selected body rule');
+ assert.ok(descendants(card()).some(n=>n.textContent===current));
+ await buttonIn(card(),'确认采用合同开放期').click();
+ assert.equal(field().after,current);assert.equal(field().status,'verified');assert.equal(Number(app.elements.get('count-pending').textContent),0);
+ assert.doesNotMatch(field().after,/180|10号|25号|下一个交易日/);
+ assert.ok(descendants(card()).some(n=>n.textContent.includes('已采用合同开放期规则')));
+ await buttonIn(card(),'撤销采用合同内容').click();
+ assert.equal(field().after,old);assert.equal(field().status,'pending');assert.ok(Number(app.elements.get('count-pending').textContent)>0);
+ assert.ok(buttonIn(card(),'预览采用合同开放期'));assert.ok(!buttonIn(card(),'撤销采用合同内容'));
 });
 
 test('no-fee review never displays old charging parameters or an irrelevant supplement form',async()=>{

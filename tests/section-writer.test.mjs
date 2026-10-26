@@ -72,3 +72,14 @@ test('PPT paragraph fields are rejected while explicit blank lines remain native
  assert.equal(textOf(elements(result.doc,A,'p')[0],'pptx'),value);assert.equal(elements(result.doc,A,'br').length,3);
  const field=await fixture('pptx',{content:'<a:fld id="field-id" type="slidenum"><a:rPr/><a:t>旧值</a:t></a:fld>'});await assert.rejects(write(field,[op(field.paragraphs[0],'新值\n续项')]),/结构|文字/);
 });
+
+for(const kind of ['docx','pptx'])test(`${kind} a manual strategy suffix insertion has an exact nonempty anchor and exports successfully`,async()=>{
+ const {analyzeMaterials,setSupplement}=await import('../src/review-engine.js');
+ const before='1、资产配置策略；2、商品期货投资策略；3、基金策略；4、风险平价策略；5、套期保值策略；6、国债期货投资策略',after=before+'；7、境外结构化票据投资策略';
+ const t=await fixture(kind,{content:kind==='docx'?wr(before):ar(before)}),p=t.paragraphs[0];
+ t.rows=[{id:'name',label:'产品名称',value:'晨星9号集合资产管理计划',tableId:'table',rowIndex:0,page:1,part:p.part,paragraphIds:[],cells:[{text:'产品名称',paragraphIds:[]},{text:'晨星9号集合资产管理计划',paragraphIds:[]}]},{id:'strategy',label:'投资策略',value:before,tableId:'table',rowIndex:1,page:1,part:p.part,paragraphIds:[p.id],cells:[{text:'投资策略',paragraphIds:[]},{text:before,paragraphIds:[p.id]}]}];
+ const task=analyzeMaterials({name:'合同.docx',blocks:[{id:'name',text:'产品名称：晨星9号集合资产管理计划'}],warnings:[]},[t]);
+ const fact=task.facts.find(f=>f.key==='investment_strategy');assert.ok(fact);setSupplement(task,fact.id,after);
+ const edits=task.materials[0].operations.filter(o=>o.kind==='replace');assert.equal(edits.length,1);assert.ok(edits[0].before);assert.equal(edits[0].before.length,1);assert.equal(p.text.slice(edits[0].start,edits[0].start+edits[0].before.length),edits[0].before);
+ const {doc}=await write(t,edits);assert.equal(textOf(elements(doc,kind==='docx'?W:A,'p')[0],kind),after);
+});

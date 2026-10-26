@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {getSectionReview,resolveStrategySummary} from '../src/contract-sections.js';
+import {getSectionReview,resolveStrategySummary,resolveStrategyReplacement} from '../src/contract-sections.js';
 import {analyzeMaterials} from '../src/review-engine.js';
 
 const ratioLines=[
@@ -77,6 +77,111 @@ test('strategy source versions and unresolved share scope cannot be silently cho
  const scoped=taskFor(['A类份额投资策略','1、资产配置策略','说明。','2、基金策略','说明。','B类份额投资策略','1、资产配置策略','说明。','2、信用套利策略','说明。','投资限制']);
  assert.notEqual(resolveStrategySummary(scoped.contract,strategyList(titles)).status,'verified');
  assert.equal(resolveStrategySummary(scoped.contract,strategyList(titles),{share:'A'}).status,'verified');
+});
+
+test('missing strategy adoption supplies only titles and preserves each material own order and separators',()=>{
+ const task=taskFor(strategyLines(),[strategyList(strategyTitles.slice(0,6)),strategyTitles.slice(0,6).reverse().join('\n')],'investment_strategy');
+ const r=review(task),a=r.materials[0],b=r.materials[1];
+ assert.deepEqual(a.fieldIds,['field0']);assert.deepEqual(a.replacement.addedTitles,['境外结构化票据投资策略']);
+ assert.equal(a.replacement.text,strategyList(strategyTitles));assert.equal(a.replacement.lines.length,1);
+ assert.ok(b.replacement.text.startsWith(strategyTitles[5]+'\n境外结构化票据投资策略\n'+strategyTitles[4]));
+ assert.ok(!a.replacement.text.includes('具体投资方法'));assert.ok(!a.replacement.text.includes('发生情形'));
+ assert.ok(!b.replacement.text.includes('；'));
+});
+
+test('inserting a middle strategy keeps correct wording and ordering and uses the original separator style',()=>{
+ const values=['资产配置策略','商品期货投资策略','基金策略'],text='（1）资产配置策略； （2）基金策略';
+ const r=review(taskFor(strategyLines(values),[text],'investment_strategy')).materials[0].replacement;
+ assert.equal(r.text,'（1）资产配置策略； （2）商品期货投资策略； （3）基金策略');
+ assert.deepEqual(r.addedTitles,['商品期货投资策略']);assert.deepEqual(r.removedTitles,[]);
+});
+
+test('obsolete strategy headings are explicitly listed in the proposed replacement, never silently removed',()=>{
+ const values=['资产配置策略','基金策略'],text='基金策略；资产配置策略；信用套利策略';
+ const r=review(taskFor(strategyLines(values),[text],'investment_strategy')).materials[0].replacement;
+ assert.equal(r.text,'基金策略；资产配置策略');assert.deepEqual(r.removedTitles,['信用套利策略']);assert.ok(r.warnings.some(w=>w.includes('信用套利策略')));
+});
+
+test('ambiguous strategy chapter or share never offers title adoption',()=>{
+ const values=['资产配置策略','基金策略'];
+ const versions=taskFor([...strategyLines(values),'附件',...strategyLines(['资产配置策略','信用套利策略'])],[strategyList(values)],'investment_strategy');
+ assert.ok(review(versions).materials.every(m=>!m.replacement));
+ const scoped=taskFor(['A类份额投资策略','1、资产配置策略','说明。','2、基金策略','说明。','B类份额投资策略','1、资产配置策略','说明。','2、信用套利策略','说明。','投资限制'],[strategyList(values)],'investment_strategy');
+ assert.ok(review(scoped).materials.every(m=>!m.replacement));
+});
+
+test('independent containers in one material receive their own strategy numbering and separators',()=>{
+ const values=['资产配置策略','基金策略','境外结构化票据投资策略'],contract=taskFor(strategyLines(values)).contract;
+ const containers=[{shapeId:'one',text:'1、资产配置策略；2、基金策略'},{shapeId:'two',text:'（一）基金策略\n（二）资产配置策略'}];
+ const before=JSON.stringify(containers),plans=containers.map(c=>resolveStrategyReplacement(contract,c.text));
+ assert.equal(plans[0].text,'1、资产配置策略；2、基金策略；3、境外结构化票据投资策略');
+ assert.equal(plans[1].text,'（一）基金策略\n（二）境外结构化票据投资策略\n（三）资产配置策略');
+ assert.equal(plans[0].lines.length,1);assert.equal(plans[1].lines.length,3);assert.equal(JSON.stringify(containers),before);
+});
+
+test('per-container strategy replacement keeps the same reliable-scope and short-title gates',()=>{
+ const values=['资产配置策略','基金策略'],contract=taskFor([...strategyLines(values),'附件',...strategyLines(['资产配置策略','信用套利策略'])]).contract;
+ assert.equal(resolveStrategyReplacement(contract,strategyList(values)),undefined);
+ assert.equal(resolveStrategyReplacement(taskFor(strategyLines(values)).contract,'本计划按照市场变化调整投资。'),undefined);
+ assert.equal(resolveStrategyReplacement(null,strategyList(values)),undefined);
+});
+
+test('underlying-fund strategy chapter cannot supply target-product title adoption',()=>{
+ const lines=['产品名称：目标9号集合资产管理计划','三、底层基金概况','投资策略','1、资产配置策略','配置说明。','2、信用套利策略','套利说明。','四、风险揭示'];
+ const task=taskFor(lines,['1、资产配置策略；2、基金策略'],'investment_strategy');
+ assert.equal(resolveStrategyReplacement(task.contract,task.materials[0].fields[0].after),undefined);
+ assert.equal(resolveStrategySummary(task.contract,task.materials[0].fields[0].after),null);
+ assert.equal(review(task),null);
+});
+
+test('standalone share and channel headers are inherited by nested strategy headings',()=>{
+ const body=['投资策略','1、资产配置策略','配置说明。','2、信用套利策略','套利说明。','四、风险揭示'],text='1、资产配置策略；2、基金策略';
+ const a=taskFor(['产品名称：目标9号集合资产管理计划','A类份额',...body]);
+ assert.equal(resolveStrategyReplacement(a.contract,text,{share:'B'}),undefined);
+ assert.ok(resolveStrategyReplacement(a.contract,text,{share:'A'}));
+ assert.equal(resolveStrategyReplacement(a.contract,text,{}),undefined);
+ const channel=taskFor(['产品名称：目标9号集合资产管理计划','渠道：建设银行',...body]);
+ assert.equal(resolveStrategyReplacement(channel.contract,text,{channel:'招商银行'}),undefined);
+ assert.ok(resolveStrategyReplacement(channel.contract,text,{channel:'建设银行'}));
+});
+
+test('an outer reference section ends at its peer and cannot hide the later own-product strategy',()=>{
+ const lines=['产品名称：目标9号集合资产管理计划','三、底层基金概况','投资策略','1、资产配置策略','说明。','2、信用套利策略','说明。','四、本计划投资安排','投资策略','1、资产配置策略','说明。','2、基金策略','说明。','五、风险揭示'];
+ const task=taskFor(lines,['资产配置策略；基金策略'],'investment_strategy'),result=resolveStrategySummary(task.contract,'资产配置策略；基金策略');
+ assert.equal(result.status,'verified');assert.ok(result.evidence.every(e=>!e.quote.includes('信用套利策略')));
+ assert.equal(review(task).materials[0].total,2);
+});
+
+test('a following standalone share heading is processed before its own strategy chapter',()=>{
+ const lines=['产品名称：目标9号集合资产管理计划','A类份额','投资策略','1、资产配置策略','说明。','2、基金策略','说明。','B类份额','投资策略','1、商品期货投资策略','说明。','2、国债期货投资策略','说明。','风险揭示'];
+ const c=taskFor(lines).contract;
+ assert.equal(resolveStrategySummary(c,'商品期货投资策略；国债期货投资策略',{share:'B'})?.status,'verified');
+ assert.equal(resolveStrategySummary(c,'资产配置策略；基金策略',{share:'A'})?.status,'verified');
+});
+
+test('ordinary investment-target item wording is not mistaken for an underlying-product parent heading',()=>{
+ const text='1、投资标的包括债券、股票及公募基金';
+ const r=review(taskFor(['二、投资范围',text,'2、其他经批准的资产','三、投资策略'],[text],'investment_scope'));
+ assert.ok(r);assert.ok(r.evidence[0].quote.includes(text));assert.equal(r.evidence[0].itemCount,2);
+});
+
+test('large restrictions differences prefer complete evidence without losing clauses or the tail',()=>{
+ const clauses=Array.from({length:15},(_,i)=>`${i+1}、本计划不得进行限制行为${i+1}。`),tail='本计划上述投资比例根据监管规定监控。';
+ const r=review(taskFor(['投资限制',...clauses,tail,'风险揭示'],['遵守合同约定的相关投资限制。'],'investment_restrictions'));
+ assert.equal(r.preferCompleteEvidence,true);assert.equal(r.evidence[0].itemCount,15);assert.equal(r.evidence[0].noteCount,1);
+ assert.match(r.summary,/差异较大.*完整合同依据.*15项.*1段补充说明/);assert.ok(r.evidence[0].quote.includes(clauses[14]));assert.ok(r.evidence[0].quote.includes(tail));
+ const local=review(taskFor(['投资限制','1、单一资产不得超过资产净值的10%。','风险揭示'],['1、单一资产不得超过资产净值的12%。'],'investment_restrictions'));
+ assert.notEqual(local.preferCompleteEvidence,true);assert.equal(local.kind,'local');
+ const smallVersions=review(taskFor(['投资限制','1、单一资产不得超过资产净值的10%。','风险揭示','附件一','投资限制','1、单一资产不得超过资产净值的12%。','风险揭示'],['1、单一资产不得超过资产净值的10%。'],'investment_restrictions'));
+ assert.notEqual(smallVersions.preferCompleteEvidence,true,'a small ambiguous rule still uses ordinary detailed review');
+});
+
+test('restriction attachment boundary stops at separate-numbered related-party heading and does not merge version counts',()=>{
+ const clauses=Array.from({length:15},(_,i)=>`${i+1}、本计划不得进行限制行为${i+1}。`),tail='本计划上述投资比例根据监管规定监控。';
+ const lines=['投资限制',...clauses,tail,'风险揭示','附件一','三','投资限制',...clauses.slice(0,14),tail,'四','关联交易','交易管控由管理人负责。','五','建仓期','建仓期6个月。'];
+ const r=review(taskFor(lines,['遵守合同约定限制。'],'investment_restrictions'));
+ assert.deepEqual(r.evidence.map(e=>e.itemCount),[15,14]);assert.equal(r.materials[0].total,15);assert.equal(r.preferCompleteEvidence,true);
+ assert.ok(r.evidence.every(e=>!e.quote.includes('建仓期')));assert.match(r.summary,/15项/);
 });
 
 test('complete numbered section includes all five ratios and tail note across pages',()=>{
