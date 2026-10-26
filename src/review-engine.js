@@ -24,6 +24,7 @@ function keyFor(label){
  const l=labelNorm(label);
  if(/^(?:业绩比较基准|业绩参考基准|业绩基准|参考业绩基准|比较基准)$/.test(l))return 'benchmark';
  if(l.length>32||/实力|简介|数据来源|奖项|股东/.test(l))return `custom:${l}`;
+ if(/(?:开售|发售|募集)(?:日期|日|期)/.test(l))return 'opening';
  const mappings=[['product_name',NAME_LABEL],['risk_rating',/风险(?:等级|评级)|产品评级/],['custodian',/托管人|保管人|托管行|保管行|集合托管人/],['manager',/管理人|受托人/],['advisor',/投资顾问/],['distributor',/销售机构|代销机构/],['product_code',/产品代码|产品编码/],['product_type',/产品类型|产品类别/],['performance',/业绩报酬|浮动.*费|浮动.*报酬/],['fees',/产品费率|管理、托管|费用/],['management_fee',/管理费|固定信托报酬/],['custody_fee',/托管费|保管费/],['subscription_fee',/认.*购.*费|参与费/],['redemption_fee',/赎回费|退出费/],['opening',/开放|预约/],['minimum_amount',/起购|认购规则|参与金额|首参|起点|认购金额/],['duration',/存续期|存续期限|产品期限/],['lockup',/封闭期|锁定期|持有期/],['warning_stop',/预警|止损/],['investment_objective',/投资目标/],['investment_scope',/投资范围/],['investment_ratios',/投资比例/],['investment_restrictions',/投资限制/],['investment_strategy',/投资策略/]];
  return mappings.find(([,re])=>re.test(l))?.[0]||`custom:${l}`;
 }
@@ -104,7 +105,7 @@ function performanceTokens(text){
   const left=text.slice(Math.max(0,m.index-150),m.index),right=text.slice(m.index+m[0].length,m.index+m[0].length+40);
   const column=left.split('\n').at(-1),tablePayout=/[\t|]\s*$/.test(column)&&/[RＲF]|收益率/.test(column)&&/[＜≤<>＞≥]/.test(column);
   const payout=tablePayout||/(?:提取|计提|收取|提成|×|乘以|按)[【\s]*$/.test(left)||/^(?:的|比例的).{0,6}(?:业绩报酬|浮动服务费)|^(?:计提|提取)/.test(right);
-  const hurdle=!payout&&(/(?:[＜≤<>＞≥=＝]|高于|低于|超过|超出|大于|小于|基准(?:为|是)?|R[12](?:为|是)|收益率(?:为|是)?|年化)[【\s]*$/.test(left)||/^\s*[＜≤<>＞≥]/.test(right)||/\d+(?:\.\d+)?%\s*[-—~～]\s*$/.test(left)||/^\s*[-—~～]\s*\d/.test(right)||/(?:[RＲF]|收益率)[-－]\s*$/.test(left));
+  const hurdle=!payout&&(/(?:[＜≤<>＞≥=＝]|高于|低于|超过|超出|大于|小于|(?:基准|标准)(?:为|是|[:：])?|R[12](?:为|是)|收益率(?:为|是)?|年化)[【\s]*$/.test(left)||/^\s*[＜≤<>＞≥]/.test(right)||/^\s*(?:为|作为)(?:本期|本次)?(?:业绩报酬)?(?:计提)?(?:基准|标准)/.test(right)||/\d+(?:\.\d+)?%\s*[-—~～]\s*$/.test(left)||/^\s*[-—~～]\s*\d/.test(right)||/(?:[RＲF]|收益率)[-－]\s*$/.test(left));
   tokens.push({start:m.index,before:m[0],value:`${number(m[0])}%`,role:payout?'ratio':hurdle?'threshold':'unknown'});
  }
  return tokens;
@@ -259,7 +260,7 @@ function announcedDates(text,label=''){
   const localLeft=text.slice(0,m.index).split(/[。；;，,：:（(\n]/).at(-1),localRight=text.slice(m.index+m[0].length).split(/[。；;，,：:（()）\n]/)[0],localContext=localLeft+m[0]+localRight;
   const roleText=localLeft+' '+label+' '+localRight;
   const role=/截止|结束|终止|最后/.test(roleText)?'end':/起始|开始|首个|首日/.test(roleText)?'start':'date';
-  const event=/预约/.test(localContext)?'reservation':/开售|发售|募集|认购/.test(localContext+' '+label)?'sale':/预约/.test(label)?'reservation':'opening';
+  const event=/预约/.test(localContext)||/预约/.test(label)?'reservation':'opening';
   const dateWindow=/仅(?:开放)?参与|仅(?:开放)?申购/.test(localRight)?'participation_only':/(?:参与|申购)(?:和|及|与)(?:退出|赎回)/.test(localRight)?'participation_exit':'';
   let parsed;try{parsed=parseDateInput(m[0],2000);}catch{}
   if(parsed?.end){
@@ -392,6 +393,22 @@ function wordCoverNames(template,target){
  }
  return names;
 }
+function wordPerformanceParagraphs(template,selection,coverNames){
+ const names=[selection.name,...[...coverNames.values()].map(n=>n.before)].filter(n=>n&&!new RegExp('^'+PRODUCT_END+'$').test(n)).map(norm);
+ if(!names.length)return[];
+ const full=new RegExp('^\\s*(?:产品名称\\s*[:：]\\s*)?([^。；;：:,，]{4,110}?'+PRODUCT_END+')\\s*$'),out=[];let excluded=false;
+ for(const p of template.paragraphs){
+  if(p.part!=='word/document.xml')continue;const text=p.text.trim();if(!text)continue;
+  const title=text.match(full);
+  if(coverNames.has(p.id)||title&&names.includes(norm(title[1])))excluded=false;
+  else if(title||text.length<80&&/(?:底层|投资标的|标的产品|历史|过往|同策略|代表产品|产品举例|公司介绍|管理人介绍|团队介绍)/.test(text))excluded=true;
+  if(excluded||p.tableId||text.length>1800||REFERENCE_TITLE.test(text)||/捐赠|假设|举例|示例/.test(text))continue;
+  if(!/(?:管理人|本(?:集合|信托)?计划|本产品)/.test(text)||!/业绩报酬/.test(text)||!/提取|计提|收取|提成/.test(text))continue;
+  if(new RegExp(PRODUCT_END).test(text)&&!names.some(n=>norm(text).includes(n)))continue;
+  const tokens=performanceTokens(text);if(tokens.some(t=>t.role==='threshold')&&tokens.some(t=>t.role==='ratio'))out.push(p);
+ }
+ return out;
+}
 function fieldParagraphs(row,map){const ids=row.cells?.slice(1).flatMap(c=>c.paragraphIds||[])||row.paragraphIds;return unique(ids||[]).map(id=>map.get(id)).filter(Boolean);}
 function addOccurrence(task,m,field,p,atom,resolution){
  const scope={product:task.target.name,...(atom.scope||scopeFor(field.label,p.text,atom.start))};
@@ -476,13 +493,15 @@ export function analyzeMaterials(contract,templates,{now,month}={}){
  const rs=records(contract);
  for(const t of templates){
   const kind=materialKind(t),selection=getRows(t,target),headings=kind==='poster'?posterHeadings(t,selection.name):null,coverNames=kind==='word'?wordCoverNames(t,target):new Map(),rows=selection.rows.length?selection.rows:kind==='poster'?posterRows(t,headings):[];
-  const m={materialId:t.id,template:t,kind,templateProductName:headings?.name||selection.name,selectedPages:kind==='poster'?(t.slides||[]).map(s=>s.page):selection.pages,operations:[],fields:[],warnings:[...(t.warnings||[])]};Object.defineProperty(m,'_performanceText',{value:rows.filter(r=>keyFor(r.label)==='performance').map(r=>r.value).join('\n')});task.materials.push(m);
-  if(!rows.length)m.warnings.push('尚未识别到可可靠定位的产品要素区，需检查模板结构。');
+  const freePerformance=kind==='word'?wordPerformanceParagraphs(t,selection,coverNames):[];
+  const m={materialId:t.id,template:t,kind,templateProductName:headings?.name||selection.name,selectedPages:kind==='poster'?(t.slides||[]).map(s=>s.page):selection.pages,operations:[],fields:[],warnings:[...(t.warnings||[])]};Object.defineProperty(m,'_performanceText',{value:[...rows.filter(r=>keyFor(r.label)==='performance').map(r=>r.value),...freePerformance.map(p=>p.text)].join('\n')});task.materials.push(m);
+  if(!rows.length&&!freePerformance.length)m.warnings.push('尚未识别到可可靠定位的产品要素区，需检查模板结构。');
   const map=new Map(t.paragraphs.map(p=>[p.id,p]));const selectedIds=new Set();
   for(const row of rows){
    const ps=fieldParagraphs(row,map);ps.forEach(p=>selectedIds.add(p.id));const field={id:`${t.id}-field-${m.fields.length+1}`,label:row.label,status:'pending',before:ps.map(p=>p.text).join('\n'),after:'',factIds:[],paragraphIds:ps.map(p=>p.id),reason:'',manualReviewReason:row.manualReviewReason};m.fields.push(field);
    for(const p of ps)if(p.text.trim())reviewParagraph(task,m,field,p,rs);
   }
+  for(const p of freePerformance){if(selectedIds.has(p.id))continue;selectedIds.add(p.id);const field={id:`${t.id}-field-${m.fields.length+1}`,label:'业绩报酬',status:'pending',before:p.text,after:'',factIds:[],paragraphIds:[p.id]};m.fields.push(field);reviewParagraph(task,m,field,p,rs);}
   // Direct identity repeats are safe only in title/disclosure text, never performance prose or peer tables.
   for(const [id,{atoms}] of headings?.dates||[]){const pending=atoms.filter(a=>!task._records.some(r=>r.m===m&&r.p.id===id&&r.atom.key===a.key&&r.atom.start===a.start));if(!pending.length)continue;const p=map.get(id),field={id:`${t.id}-field-${m.fields.length+1}`,label:'开售/开放日期',before:p.text,after:'',factIds:[],paragraphIds:[id],status:'pending'};m.fields.push(field);for(const atom of pending)addOccurrence(task,m,field,p,atom,pendingAnnouncement());}
   const old=m.templateProductName;const oldShort=old?.replace(new RegExp(PRODUCT_END+'$'),'');
@@ -525,7 +544,7 @@ export function getSupplementGroups(task){
   const kind=GROUP_KIND(f),scope={...f.scope};let identity=f.id;
   if(['performance','benchmark','code','opening','date'].includes(kind)){
    delete scope.condition;
-   if(kind==='date')scope.event=(f.scope.condition||'').split('|')[0]||'opening';
+   if(kind==='date'){scope.event=(f.scope.condition||'').split('|')[0]||'opening';if(scope.event==='sale')scope.event='opening';}
    // Whole unmatched prose has its own meaning and must not share a replacement.
    identity=kind==='opening'&&f.key==='opening'?f.id:kind+'|'+JSON.stringify(scope);
   }
@@ -615,7 +634,9 @@ function openingDependencyInvalidations(task,updates,invalidRuleGroups=[]){
 }
 function previewDates(task,group,facts,raw){
  const windows={participation_exit:raw.match(/(?:参与和退出|参与退出|申购和赎回)\s*[:：]\s*([^;；\n]+)/)?.[1],participation_only:raw.match(/(?:仅参与|仅开放参与|仅申购)\s*[:：]\s*([^;；\n]+)/)?.[1]};
- const general=raw.match(/(?:本次开放日|开放日期|本次开售日|本次募集期|本次预约日)\s*[:：]\s*([^;；\n]+)/)?.[1]||(!Object.values(windows).some(Boolean)?raw.split(/[;；\n]/)[0]:'');
+ const announced=[...raw.matchAll(/(?:^|[;；\n])\s*(?:本次开放日|本次开放日期|开放日期|开放日|本次开售日|开售日期|开售日|募集日期|本次募集期|募集期)\s*[:：]\s*([^;；\n]+)/g)].map(m=>m[1].trim());
+ if(new Set(announced.map(value=>parseDateInput(value,Number(task.month.slice(0,4))).value)).size>1)throw new Error('本次开放日与本次开售日为同一日期，但补充了不同值，请统一后再应用。');
+ const general=announced[0]||raw.match(/(?:本次预约日|预约日期)\s*[:：]\s*([^;；\n]+)/)?.[1]||(!Object.values(windows).some(Boolean)?raw.split(/[;；\n]/)[0]:'');
  const updates=[],warnings=[],notes=[];let generalParsed;if(general)generalParsed=parseDateInput(general,Number(task.month.slice(0,4)));
  const derived=Object.values(windows).some(Boolean)?{windows:{},warnings:[],notes:[]}:deriveOpeningWindows(task,group,facts,raw,generalParsed);Object.assign(windows,derived.windows);warnings.push(...derived.warnings);notes.push(...derived.notes);
  for(const f of facts){const rs=task._records.filter(r=>r.f===f),window=rs.find(r=>r.atom.dateWindow)?.atom.dateWindow||'',label=window==='participation_exit'?'参与和退出日期':window==='participation_only'?'仅参与日期':f.label,value=window?windows[window]:general;
@@ -648,7 +669,7 @@ export function previewSupplementField(task,kind,text){
  const labels={date:'本次开放日',performance:'业绩报酬',benchmark:'业绩比较基准',code:'产品代码',opening:'开放期'};
  if(!labels[kind])throw new Error('请选择有效的补充要素。');
  let raw=String(text??'').normalize('NFKC').trim();if(!raw)throw new Error('请填写本行需要补充的内容。');
- const aliases={date:'本次开放日|本次开放日期|开放日期|开放日',performance:'业绩报酬',benchmark:'业绩比较基准|业绩参考基准|业绩基准',code:'产品代码|产品编码',opening:'开放期|开放规则|开放周期'};
+ const aliases={date:'本次开放日|本次开放日期|开放日期|开放日|本次开售日|开售日|开售日期|募集日期|本次募集期|募集期',performance:'业绩报酬',benchmark:'业绩比较基准|业绩参考基准|业绩基准',code:'产品代码|产品编码',opening:'开放期|开放规则|开放周期'};
  // Labels copied from another row should not be interpreted as numbers for this row.
  for(const [other,names]of Object.entries(aliases))if(other!==kind&&new RegExp('(?:^|[;；\\n])\\s*(?:'+names+')\\s*[:：]').test(raw))throw new Error('本行只解析'+labels[kind]+'，请将其他要素分别填入对应行。');
  let groups=getSupplementGroups(task).filter(g=>g.kind===kind&&(kind!=='date'||g.scope.event==='opening'));const notes=[];
@@ -658,20 +679,34 @@ export function previewSupplementField(task,kind,text){
  }
  if(!groups.length)return{text:raw,updates:[],warnings:['模板未识别到'+labels[kind]+'对应位置，未写入。']};
  if(groups.length>1)return{text:raw,updates:[],warnings:['该要素存在多个份额或口径，请在下方对应卡片分别填写。']};
- raw=raw.replace(new RegExp('^(?:'+aliases[kind]+')\\s*[:：]\\s*'),'').trim();
+ if(kind!=='date')raw=raw.replace(new RegExp('^(?:'+aliases[kind]+')\\s*[:：]\\s*'),'').trim();
  if(kind==='benchmark'){
   const m=raw.match(/^(?:(?:业绩比较基准|业绩参考基准|业绩基准)(?:为|是)?\s*)?(\d+(?:\.\d+)?\s*%?)(?:\s*(?:业绩比较基准|业绩参考基准|业绩基准))?[。.]?$/);
   if(!m)throw new Error('请填写单个业绩比较基准，例如2.25%，不要将业绩报酬分段填入本行。');raw=m[1];
  }
  const preview=previewSupplement(task,groups[0].id,raw);preview.warnings.push(...notes);return preview;
 }
+export function previewPerformanceNumbers(task,input={}){
+ const mode=input.mode;if(!['single','tiered'].includes(mode))throw new Error('请选择单档或分段计提方式。');
+ const parse=(key,label)=>{const value=String(input[key]??'').normalize('NFKC').trim();if(!/^\d+(?:\.\d+)?\s*%?$/.test(value))throw new Error('请填写'+label+'，仅需输入0至100之间的百分比数字。');const n=Number(value.replace(/[%\s]/g,''));if(n<0||n>100)throw new Error(label+'应在0至100之间。');return n+'%';};
+ const values={performance_R1:parse('threshold1','第一档计提基准'),performance_ratio_1:parse('ratio1','第一档提取比例')};
+ if(mode==='tiered'){values.performance_R2=parse('threshold2','第二档计提基准');values.performance_ratio_2=parse('ratio2','第二档提取比例');if(number(values.performance_R1)>=number(values.performance_R2))throw new Error('第一档计提基准必须小于第二档计提基准。');}
+ const text=mode==='single'?`年化收益率超过${values.performance_R1}的部分，提取${values.performance_ratio_1}作为业绩报酬。`:`${values.performance_R1}＜年化收益率≤${values.performance_R2}，提取${values.performance_ratio_1}；年化收益率＞${values.performance_R2}，提取${values.performance_ratio_2}。`;
+ const groups=getSupplementGroups(task).filter(g=>g.kind==='performance');
+ if(!groups.length)return{text,updates:[],warnings:['模板未识别到业绩报酬参数对应位置，未写入。']};
+ if(groups.length>1)return{text,updates:[],warnings:['业绩报酬存在多个份额或口径，请在下方对应卡片分别填写。']};
+ const group=groups[0],facts=task.facts.filter(f=>group.factIds.includes(f.id)),expected=unique(facts.map(f=>f.key)),given=Object.keys(values);
+ if(expected.length!==given.length||expected.some(key=>!given.includes(key)))throw new Error('所选'+(mode==='single'?'单档':'分段')+'计提方式与模板已识别的档位不一致，请选择匹配的计提方式；本次未写入。');
+ return previewUpdates(task,facts,values,text,group.id);
+}
 export function previewSupplementText(task,text){
  const raw=String(text).trim(),groups=getSupplementGroups(task),requests=[],warnings=[];
  if(/[-−－]\s*\d+(?:\.\d+)?\s*[%％]/.test(raw))throw new Error('当前补充百分比应为0至100，不能填写负数。');
  const extract=label=>raw.match(new RegExp('(?:^|[;；\\n])\\s*(?:'+label+')\\s*[:：]\\s*([^;；\\n]+)'))?.[1]?.trim();
- const date=extract('本次开放日|本次开放日期|开放日期|开放日'),windowBoth=extract('参与和退出|参与退出|申购和赎回'),windowOnly=extract('仅参与|仅开放参与|仅申购'),splitRule=raw.match(/(?:^|[;；\n])\s*(?:分段规则|开放分段|开放安排)\s*[:：]\s*([^\n]+)/)?.[1]?.trim();
+ const dates=[...raw.matchAll(/(?:^|[;；\n])\s*(?:本次开放日|本次开放日期|开放日期|开放日|本次开售日|开售日期|开售日|募集日期|本次募集期|募集期)\s*[:：]\s*([^;；\n]+)/g)].map(m=>m[1].trim());
+ if(new Set(dates.map(value=>parseDateInput(value,Number(task.month.slice(0,4))).value)).size>1)throw new Error('本次开放日与本次开售日为同一日期，但补充了不同值，请统一后再应用。');
+ const date=dates[0],windowBoth=extract('参与和退出|参与退出|申购和赎回'),windowOnly=extract('仅参与|仅开放参与|仅申购'),splitRule=raw.match(/(?:^|[;；\n])\s*(?:分段规则|开放分段|开放安排)\s*[:：]\s*([^\n]+)/)?.[1]?.trim();
  if(date||windowBoth||windowOnly)requests.push(['date',[date?'本次开放日：'+date:'',windowBoth?'参与和退出：'+windowBoth:'',windowOnly?'仅参与：'+windowOnly:'',splitRule?'分段规则：'+splitRule:''].filter(Boolean).join('；'),'opening']);
- const sale=extract('本次开售日|开售日|募集日期|本次募集期|募集期');if(sale)requests.push(['date',sale,'sale']);
  const reservation=extract('本次预约日|预约日期');if(reservation)requests.push(['date',reservation,'reservation']);
  const opening=extract('开放期|开放规则|开放周期');if(opening)requests.push(['opening',opening]);
  const code=extract('产品代码|产品编码');if(code)requests.push(['code',code]);
