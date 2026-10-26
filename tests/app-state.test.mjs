@@ -21,9 +21,11 @@ class Element {
     this.hidden = false;
     this.disabled = false;
     this.dataset = {};
-    this.classList = {add() {}, remove() {}, toggle() {}};
+    const classes = new Set();
+    this.classList = {add: name => classes.add(name), remove: name => classes.delete(name), contains: name => classes.has(name), toggle(name, active) { if(active ?? !classes.has(name)) classes.add(name); else classes.delete(name); }};
   }
   append(...children) { this.children.push(...children); }
+  contains(element) { return element===this || descendants(this).includes(element); }
   replaceChildren(...children) { this.children = children; }
   setAttribute(name, value) { this[name] = value; }
   addEventListener(type, callback) {
@@ -161,6 +163,58 @@ test('editing bulk text after preview cannot apply the stale parsed values',asyn
  const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();appendSupplementFacts(app);
  app.elements.get('supplement-text').value='产品代码：000123';await app.elements.get('supplement-parse').click();const oldButton=buttonIn(app.elements.get('supplement-preview'),'确认并应用补充');
  app.elements.get('supplement-text').value='产品代码：000999';await app.elements.get('supplement-text').dispatch('input');await oldButton.click();assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null);
+});
+
+test('editing an individual field invalidates its previous preview',async()=>{
+ const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();appendSupplementFacts(app);
+ const input=descendants(app.elements.get('facts-list')).find(n=>n['aria-label']==='补充产品代码');
+ const form=descendants(app.elements.get('facts-list')).find(n=>n.tagName==='form'&&n.children.includes(input));
+ input.value='000123';await form.onsubmit({preventDefault(){}});const oldButton=buttonIn(app.elements.get('supplement-preview'),'确认并应用补充');
+ input.value='000999';await input.dispatch('input');await oldButton.click();
+ assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null);assert.equal(app.elements.get('supplement-preview').hidden,true);
+});
+
+const calendarFixture=()=>{const row={id:'row-2',productName:'示例稳健1号',productCode:'000123',source:{file:'日历.xlsx',sheet:'Sheet1',row:2}};return {readProductCalendar:async({name})=>({name,rows:[row],warnings:[]}),matchCalendarRows:()=>[row]};};
+async function appForCalendar(calendar=calendarFixture()){const app=createApp({calendar});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();appendSupplementFacts(app);return app;}
+
+test('dropping a calendar shares click-import preview and requires confirmation before applying',async()=>{
+ const app=await appForCalendar(),zone=app.elements.get('calendar-drop');let prevented=false;
+ await zone.dispatch('dragover',{dataTransfer:{types:['Files']},preventDefault(){prevented=true;}});
+ assert.equal(prevented,true);assert.equal(zone.classList.contains('dragging'),true);
+ await zone.dispatch('drop',{dataTransfer:{files:[file('日历.xlsx')]}});
+ assert.equal(zone.classList.contains('dragging'),false);assert.equal(app.elements.get('calendar-row').value,'row-2');
+ assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null);
+ await buttonIn(app.elements.get('supplement-preview'),'确认并应用补充').click();
+ assert.equal(app.state.task.facts.find(f=>f.id==='code').value,'000123');assert.equal(app.state.task.facts.find(f=>f.id==='code').source,'user_calendar');
+});
+
+test('failed replacement clears old unapplied calendar rows and preview, while keeping applied facts',async()=>{
+ const calendar=calendarFixture(),read=calendar.readProductCalendar;calendar.readProductCalendar=async input=>{if(input.name==='损坏.xlsx')throw new Error('无法读取产品日历');return read(input);};
+ const app=await appForCalendar(calendar);await app.elements.get('calendar-input').dispatch('change',{target:{files:[file('日历.xlsx')]}});
+ await buttonIn(app.elements.get('supplement-preview'),'确认并应用补充').click();await app.elements.get('calendar-row').dispatch('change');
+ const oldButton=buttonIn(app.elements.get('supplement-preview'),'确认并应用补充');
+ await app.elements.get('calendar-drop').dispatch('drop',{dataTransfer:{files:[file('损坏.xlsx')]}});await oldButton.click();
+ assert.equal(app.state.calendar,null);assert.equal(app.elements.get('calendar-row').hidden,true);assert.equal(app.elements.get('calendar-row-detail').children.length,0);
+ assert.equal(app.state.supplementPreview,null);assert.equal(app.state.task.facts.find(f=>f.id==='code').value,'000123');assert.equal(app.state.busy,false);assert.match(app.elements.get('calendar-status').textContent,/未导入/);
+});
+
+test('calendar drop validates one XLSX and size; empty drops and busy drops cannot replace the preview',async()=>{
+ const app=await appForCalendar(),zone=app.elements.get('calendar-drop');
+ for(const files of [[file('a.xlsx'),file('b.xlsx')],[file('日历.docx')],[{...file('大文件.xlsx'),size:31*1024*1024}]]){
+  await zone.dispatch('drop',{dataTransfer:{files}});assert.equal(app.state.calendar,null);assert.equal(app.state.busy,false);assert.equal(app.elements.get('error-panel').hidden,false);
+ }
+ await zone.dispatch('drop',{dataTransfer:{files:[file('日历.xlsx')]}});const preview=app.state.supplementPreview;
+ await zone.dispatch('drop',{dataTransfer:{files:[]}});assert.equal(app.state.supplementPreview,preview);
+ app.state.busy=true;await zone.dispatch('drop',{dataTransfer:{files:[file('新日历.xlsx')]}});assert.equal(app.state.supplementPreview,preview);assert.equal(app.state.calendar.name,'日历.xlsx');
+});
+
+test('calendar drop cannot race an in-progress import and supports importing the same file again',async()=>{
+ const gate=deferred(),calendar=calendarFixture(),read=calendar.readProductCalendar;let reads=0;
+ calendar.readProductCalendar=async input=>{reads++;if(reads===1)await gate.promise;return read(input);};
+ const app=await appForCalendar(calendar),zone=app.elements.get('calendar-drop');const first=zone.dispatch('drop',{dataTransfer:{files:[file('日历.xlsx')]}});
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(app.state.busy,true);
+ await zone.dispatch('drop',{dataTransfer:{files:[file('别的日历.xlsx')]}});gate.resolve();await first;assert.equal(reads,1);assert.equal(app.state.calendar.name,'日历.xlsx');
+ await app.elements.get('calendar-input').dispatch('change',{target:{files:[file('日历.xlsx')]}});assert.equal(reads,2);assert.equal(app.elements.get('calendar-input').value,'');assert.equal(app.elements.get('error-panel').hidden,true);
 });
 
 test('one unreadable template does not prevent reviewing and downloading the other template',async()=>{

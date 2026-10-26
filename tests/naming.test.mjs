@@ -21,8 +21,18 @@ test('adds missing month without overwriting target name already in filename',()
 test('does not mistake 18-month term for a publication date',()=>{
  assert.equal(deliveryName('示例18个月7号.pptx',{targetName:'示例18个月7号集合资产管理计划',templateProductName:'示例18个月7号',kind:'ppt',month:'202610'}),'【202610】示例18个月7号产品要素.pptx');
 });
-test('full filename date is not silently transformed to a month',()=>{
- assert.equal(deliveryName('【一页通20260630】示例1号.docx',{targetName:'示例1号集合资产管理计划',templateProductName:'示例1号',kind:'word',month:'202610'}),'【一页通20260630 202610】示例1号.docx');
+test('full production dates in filename headers become the selected production month',()=>{
+ for(const [prefix,extension,kind,tail]of [['一页通20260630','docx','word',''],['PPT 20260831','pptx','ppt','产品要素'],['甲行 海报20260901','pptx','poster','']]){
+  assert.equal(deliveryName(`【${prefix}】示例1号.${extension}`,{targetName:'示例1号集合资产管理计划',templateProductName:'示例1号',kind,month:'202610'}),`【${prefix.replace(/2026\d{4}/,'202610')}】示例1号${tail}.${extension}`);
+ }
+});
+
+test('date-shaped product numbers outside production headers are preserved',()=>{
+ const product='示例20260831号';
+ assert.equal(deliveryName(`【PPT 20260831】${product}.pptx`,{targetName:product,templateProductName:product,kind:'ppt',month:'202611'}),`【PPT 202611】${product}产品要素.pptx`);
+ assert.equal(deliveryName(`${product}.docx`,{targetName:product,kind:'word',month:'202611'}),`【202611】${product}.docx`);
+ const bracketedProduct='示例【20260831】1号';
+ assert.equal(deliveryName(`【PPT 20260831】${bracketedProduct}.pptx`,{targetName:bracketedProduct,kind:'ppt',month:'202611'}),`【PPT 202611】${bracketedProduct}产品要素.pptx`);
 });
 test('rejects invalid month',()=>assert.throws(()=>deliveryName('a.docx',{targetName:'示例1号',kind:'word',month:'202613'})));
 
