@@ -8,9 +8,10 @@ import {monthlyWeekdayPatterns,parseMonthlyWeekdayInput,monthlyWeekdayChanges} f
 import {resolveMonthlyDateRule} from './opening-rules.js?v=20261026-opening-strategy';
 export {getOpeningRuleReview} from './opening-rules.js?v=20261026-opening-strategy';
 import {getTradingDays} from './trading-calendar.js?v=20261026-openings';
-import {buildRedemptionTierIndex,matchTemplateRedemptionTier,resolveRedemptionTier} from './redemption-tiers.js?v=20261027-equal-fees';
-import {previewFeeText,applyFeeText,refreshFeeTextOperations,releaseFeeText,assertFeeActionScope} from './fee-text-supplement.js?v=20261027-equal-fees';
-import {simplifyEqualFeeTiers} from './equal-fee-tiers.js?v=20261027-equal-fees';
+import {buildRedemptionTierIndex,matchTemplateRedemptionTier,resolveRedemptionTier} from './redemption-tiers.js?v=20261027-custom-investment';
+import {previewFeeText,applyFeeText,refreshFeeTextOperations,releaseFeeText,assertFeeActionScope} from './fee-text-supplement.js?v=20261027-custom-investment';
+import {simplifyEqualFeeTiers} from './equal-fee-tiers.js?v=20261027-custom-investment';
+import {previewCustomSection as previewCustomSectionText,applyCustomSectionOverride,refreshCustomSectionOperations,refreshCustomSectionFields,releaseCustomSection} from './custom-section.js?v=20261027-custom-investment';
 const PRODUCT_END='(?:集合资金信托计划|集合资产信托计划|集合资产管理计划|单一资产管理计划|资产管理计划|证券投资基金|信托计划)';
 const NAME_LABEL=/^(?:产品名称|产品全称|信托名称|信托计划名称|基金名称|计划名称|资产管理计划名称|产品简称)$/;
 const MARKETING=/历史业绩|产品表现|累计增长|最新净值|成立以来|年化收益|产品举例|同策略|代表产品|获奖|金牛奖/;
@@ -528,7 +529,7 @@ function addOccurrence(task,m,field,p,atom,resolution){
 }
 function operationId(m){m._operationSequence=(m._operationSequence||0)+1;return 'op-'+m._operationSequence;}
 function renderRecord({m,field,p,atom,f,userRenderValue}){
- if(field.sectionOverrideId||field.feeTextOverrideId)return;
+ if(field.sectionOverrideId||field.feeTextOverrideId||field.customSectionOverrideId)return;
  const common={paragraphId:p.id,part:p.part,index:p.index,reason:f.reason,factIds:[f.id]};
  if(f.userConfirmed)return;
  if(atom.key==='opening_fixed_monthdays'&&f.status==='verified'&&userRenderValue===undefined){
@@ -616,6 +617,7 @@ function finalize(task){
  }
  refreshSectionOperations(task);
  refreshFeeTextOperations(task);
+ refreshCustomSectionOperations(task);
  for(const m of task.materials){
   m.operations=m.operations.filter((o,i,arr)=>!arr.slice(0,i).some(a=>a.paragraphId===o.paragraphId&&a.kind===o.kind&&a.start===o.start&&a.before===o.before&&a.after===o.after));
   for(const field of m.fields){field.factIds=unique(field.factIds);const fs=field.factIds.map(id=>task.facts.find(f=>f.id===id));field.status=fs.some(f=>f.status==='conflict')?'conflict':fs.some(f=>f.status==='pending')?'pending':'verified';const replaces=m.operations.filter(o=>field.paragraphIds.includes(o.paragraphId)&&o.kind==='replace');field.after=field.paragraphIds.map(id=>{let t=m.template.paragraphs.find(p=>p.id===id)?.text||'';for(const o of replaces.filter(o=>o.paragraphId===id).sort((a,b)=>b.start-a.start))t=t.slice(0,o.start)+o.after+t.slice(o.start+o.before.length);return t;}).join('\n');if(field.source!=='company')field.reason=field.status==='verified'?(replaces.length?'合同有明确依据，最小范围更新。':'原值与已取得依据一致。'):'保留模板原值，关键参数标黄并添加批注。';}
@@ -630,6 +632,7 @@ function finalize(task){
    field.after=after;field.equalFeeCompacted=true;field.reason='各档费率相同，合并为统一费率；原合同依据保留。';
   }
  }
+ refreshCustomSectionFields(task);
  task.stats={facts:task.facts.length,verified:task.facts.filter(f=>f.status==='verified').length,pending:task.facts.filter(f=>f.status!=='verified').length,contractMissing:task.facts.filter(f=>f.status!=='verified'&&f.reasonType==='contract_missing').length,needsReview:task.facts.filter(f=>f.status!=='verified'&&f.reasonType!=='contract_missing').length,changes:task.materials.reduce((n,m)=>n+m.operations.filter(o=>o.kind==='replace').length,0),materials:task.materials.length};return task;
 }
 export function analyzeMaterials(contract,templates,{now,month}={}){
@@ -768,6 +771,7 @@ function supplementChanges(task,preview){
  preview.changes=[...changes.values()];return preview;
 }
 function validateSupplement(fact,value,task,perOccurrence=false){
+ if(fact.customSectionOverrideId)throw new Error('此项已自定义整项替换，请继续在自定义替换中编辑，或撤销后分别补充原文。');
  if(fact.feeTextOverrideId)throw new Error('此项已按整段文字修改，请在本卡片重新填写完整内容，或撤销整段修改后调整数字。');
  if(fact.sectionOverrideId)throw new Error('此项已采用合同内容；请先撤销采用，再单独补充。');
  const raw=String(value??'').trim();if(!raw)throw new Error('请输入补充值。');let accepted=raw;
@@ -810,9 +814,12 @@ function rebuildFacts(task,ids){
  const selected=new Set(ids);for(const m of task.materials)m.operations=m.operations.filter(o=>!o.factIds?.some(id=>selected.has(id)));
  for(const r of task._records)if(selected.has(r.f.id))renderRecord(r);return finalize(task);
 }
-export const previewContractSection=previewSectionAdoption;
-export function applyContractSection(task,preview){adoptSection(task,preview);return finalize(task);}
+export function previewContractSection(task,factIds){if(task.facts.some(f=>factIds?.includes(f.id)&&f.customSectionOverrideId))throw new Error('此项已自定义替换，请先撤销，再采用合同内容。');return previewSectionAdoption(task,factIds);}
+export function applyContractSection(task,preview){previewContractSection(task,preview?.factIds);adoptSection(task,preview);return finalize(task);}
 export function undoContractSection(task,id){const ids=releaseSection(task,id);return rebuildFacts(task,ids);}
+export const previewCustomSection=previewCustomSectionText;
+export function applyCustomSection(task,preview){applyCustomSectionOverride(task,preview);return finalize(task);}
+export function undoCustomSection(task,id){return rebuildFacts(task,releaseCustomSection(task,id));}
 const GROUP_KIND=f=>f.key==='performance_policy'?'performance_policy':f.key==='opening_announced_date'?'date':f.key.startsWith('performance_')||f.key==='custom:performance_parameter'?'performance':f.key==='benchmark'?'benchmark':f.key==='product_code'?'code':/^opening(?:_|$)/.test(f.key)?'opening':'text';
 export function getSupplementGroups(task){
  const groups=new Map();

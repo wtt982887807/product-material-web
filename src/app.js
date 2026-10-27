@@ -87,7 +87,7 @@ $('reset-button').onclick=()=>{state.run++;state.contract=null;state.templates=[
 $('analyze-button').onclick=async()=>{
  if(state.busy||!state.companyReady)return;try{updateMonth();}catch(error){showError(error);return;}const run=++state.run;invalidate();setBusy(true);progress('正在读取合同','建立本次合同索引，保留文字出处。');await nextPaint();
  try{
-  const [{readWordContract,readWordTemplate},reviewApi]=await Promise.all([import('./word-input.js?v=20261027-equal-fees'),import('./review-engine.js?v=20261027-equal-fees')]);state.reviewApi=reviewApi;const {analyzeMaterials}=reviewApi;
+  const [{readWordContract,readWordTemplate},reviewApi]=await Promise.all([import('./word-input.js?v=20261027-custom-investment'),import('./review-engine.js?v=20261027-custom-investment')]);state.reviewApi=reviewApi;const {analyzeMaterials}=reviewApi;
   const contract=await readWordContract({name:state.contract.name,bytes:new Uint8Array(await state.contract.arrayBuffer())},{onProgress:progress});
   const templates=[],inputIssues=[],seen=new Set();
   for(const [i,file]of state.templates.entries()){
@@ -111,7 +111,7 @@ $('analyze-button').onclick=async()=>{
 function factChanged(fact){return state.task.materials.some(m=>m.operations.some(o=>o.kind==='replace'&&o.factIds?.includes(fact.id)));}
 function factStatus(fact){return fact.status==='verified'?(factChanged(fact)?'changed':'verified'):(fact.status==='conflict'?'conflict':'pending');}
 function materialName(m){try{return deliveryName(m.template.name,{targetName:state.task.target.name,templateProductName:m.templateProductName,kind:m.kind,month:state.task.month});}catch(error){return m.template.name+'（命名待检查）';}}
-function sourceTitle(evidence){if(String(evidence.blockId).startsWith('company-'))return '最新公司介绍依据';if(String(evidence.blockId).startsWith('user-calendar')){const s=evidence.source||{};return '产品日历补充'+(s.file?'：'+s.file+' · '+(s.sheet||'')+' · 第'+s.row+'行':'');}if(String(evidence.blockId).startsWith('user-confirm'))return '人工确认';if(evidence.blockId==='user-supplement')return '手动补充';if(String(evidence.blockId).startsWith('template-'))return '模板中的说明';return '合同依据';}
+function sourceTitle(evidence){if(String(evidence.blockId).startsWith('user-custom'))return '用户自定义内容';if(String(evidence.blockId).startsWith('company-'))return '最新公司介绍依据';if(String(evidence.blockId).startsWith('user-calendar')){const s=evidence.source||{};return '产品日历补充'+(s.file?'：'+s.file+' · '+(s.sheet||'')+' · 第'+s.row+'行':'');}if(String(evidence.blockId).startsWith('user-confirm'))return '人工确认';if(evidence.blockId==='user-supplement')return '手动补充';if(String(evidence.blockId).startsWith('template-'))return '模板中的说明';return '合同依据';}
 function renderFact(fact){
  const row=el('article','fact-row');row.dataset.factId=fact.id;const status=factStatus(fact);const head=el('div','fact-heading');head.append(el('strong','',fact.label||fact.key));head.append(el('span','badge '+status,({changed:'已修改',verified:'原样保留',pending:'保留待核',conflict:'需要复核'})[status]));const count=new Set((fact.occurrences||[]).map(o=>o.materialId+'|'+o.paragraphId)).size;head.append(el('small','',`关联 ${count} 处`));row.append(head);
  const value=fact.value===null||fact.value===undefined?'保留各模板原值':String(fact.value);row.append(el('p','fact-value',value.length>220?value.slice(0,220)+'…':value));if(fact.status!=='verified')row.append(el('p','fact-reason',fact.reasonType==='contract_missing'?'合同未给出具体值，保留原值。':'需要人工核对，当前未自动确认。'));row.append(el('p','fact-reason',fact.reason||''));
@@ -121,7 +121,7 @@ function renderFact(fact){
  for(const m of state.task.materials){const fields=m.fields.filter(f=>f.factIds?.includes(fact.id));for(const field of fields){const occurrence=el('div','occurrence');occurrence.append(el('strong','',m.template.name+' · '+field.label));const before=field.before||'';const after=field.after??before;if(before!==after){const b=el('p');b.append(el('del','',before));const a=el('p');a.append(el('ins','',after));occurrence.append(b,a);}else occurrence.append(el('p','',before));details.append(occurrence);}}
  row.append(details);
  if(fact.status!=='verified'){
-  const form=el('form','supplement');const input=el('input');input.placeholder='有明确补充资料时，可在这里填写';input.setAttribute('aria-label','补充'+(fact.label||fact.key));const button=el('button','','确认补充');button.type='submit';form.append(input,button);form.onsubmit=async e=>{e.preventDefault();if(!input.value.trim())return;try{const {setSupplement}=await import('./review-engine.js?v=20261027-equal-fees');state.task=await setSupplement(state.task,fact.id,input.value);clearDownloads();$('error-panel').hidden=true;changeStep('review');renderReview();}catch(error){showError(error);}};row.append(form);
+  const form=el('form','supplement');const input=el('input');input.placeholder='有明确补充资料时，可在这里填写';input.setAttribute('aria-label','补充'+(fact.label||fact.key));const button=el('button','','确认补充');button.type='submit';form.append(input,button);form.onsubmit=async e=>{e.preventDefault();if(!input.value.trim())return;try{const {setSupplement}=await import('./review-engine.js?v=20261027-custom-investment');state.task=await setSupplement(state.task,fact.id,input.value);clearDownloads();$('error-panel').hidden=true;changeStep('review');renderReview();}catch(error){showError(error);}};row.append(form);
  }
  return row;
 }
@@ -154,7 +154,7 @@ function sectionSignature(review){
  return JSON.stringify([review.evidence,review.materials,wording]);
 }
 function sectionConfirmed(review){return !!review&&state.task.sectionAcknowledgements?.[review.id]===sectionSignature(review);}
-function sectionPending(review){return !!review?.needsReview&&!sectionConfirmed(review);}
+function sectionPending(review){return !!review?.needsReview&&!sectionConfirmed(review)&&!review.factIds?.some(id=>state.task.facts.find(f=>f.id===id)?.customSectionOverrideId);}
 function sectionCanAdopt(review){return ['investment_ratios','investment_strategy','opening_fixed_monthdays'].includes(review?.key)&&!!(review.replacement?.lines?.length||review.materials?.some(m=>m.replacement?.lines?.length));}
 function sectionAction(review){return review.key==='investment_strategy'?(review.materials?.some(m=>m.replacement?.removedTitles?.length)?'采用合同策略标题':'补齐策略标题'):review.key==='opening_fixed_monthdays'?'采用合同开放期':'采用合同投资比例';}
 function sectionAdoptedText(review){return review?.key==='investment_strategy'?'已采用合同策略标题':review?.key==='opening_fixed_monthdays'?'已采用合同开放期规则':'已采用完整合同投资比例';}
@@ -206,20 +206,59 @@ function supplementForm(group,label){
  form.onsubmit=e=>{e.preventDefault();if(state.busy)return;discardSupplementPreview();if(!input.value.trim()){showSupplementIssue('请填写本次确认使用的内容，再预览补充；当前物料保持不变。',feedback);return;}try{showSupplementPreview((fee&&state.reviewApi.previewCardSupplement?state.reviewApi.previewCardSupplement:state.reviewApi.previewSupplement)(state.task,group.id,input.value),{label,box:feedback});}catch(error){showSupplementIssue(error,feedback);}};
  return form;
 }
+function customSectionFor(group){const id=groupFacts(group).find(f=>f.customSectionOverrideId)?.customSectionOverrideId;return state.task.customSectionOverrides?.[id];}
+function canCustomizeSection(group){const keys=[...new Set(groupFacts(group).map(f=>f.key))];return keys.length===1&&['investment_scope','investment_ratios'].includes(keys[0]);}
+function renderInvestmentEvidence(details,section){
+ const key=s=>String(s).normalize('NFKC').replace(/\s+/g,''),versions=[];
+ for(const e of section.evidence||[]){const existing=versions.find(v=>key(v.quote)===key(e.quote));if(existing)existing.locations+=(e.duplicateCount||0)+1;else versions.push({...e,locations:(e.duplicateCount||0)+1});}
+ if(!versions.length)return;
+ details.append(el('h4','','合同依据'),el('p','supplement-note','来源：'+state.task.contract.name+(versions.length>1?'。不同位置原文分别保留，以下顺序不代表适用优先级。':'')));
+ const lines=e=>String(e.quote).split(/\n/).map(s=>s.trim()).filter(s=>s&&!/^(?:[（(]?[一二三四五六七八九十\d]+[）)、.．]?\s*)?投资(?:范围|比例)[:：]?\s*$/.test(s));
+ const first=versions[0],firstLines=lines(first),firstKeys=new Set(firstLines.map(key));
+ for(const [i,e]of versions.entries()){
+  const count='完整合同依据 · 共 '+e.itemCount+' 项'+(e.noteCount?'＋'+e.noteCount+' 段补充说明':'')+(e.locations>1?' · '+e.locations+' 处原文一致，合并展示':'');
+  if(!i){details.append(el('p','',count),el('blockquote','section-evidence',e.quote));continue;}
+  const current=lines(e),currentKeys=new Set(current.map(key)),same=current.filter(s=>firstKeys.has(key(s))).length,missing=firstLines.filter(s=>!currentKeys.has(key(s))),added=current.filter(s=>!firstKeys.has(key(s)));
+  const other=el('details','alternate-section-evidence');other.append(el('summary','','其他位置的合同依据 · '+(same?'与上方'+same+'段相同':'内容不同，展开核对')));
+  if(missing.length)other.append(el('p','supplement-note','与上方相比，本处未含：'+missing.join('\n')));
+  if(added.length)other.append(el('p','supplement-note','本处另有：'+added.join('\n')));
+  other.append(el('p','',count),el('blockquote','section-evidence',e.quote));details.append(other);
+ }
+}
+function customSectionControl(group,label){
+ const override=customSectionFor(group),details=el('details','custom-section-control');details.append(el('summary','','自定义替换'));
+ details.append(el('p','supplement-note','粘贴本项需要保留的完整内容。确认后整项替换，未包含的旧条目会删除；相关物料一起更新，Word 保留审阅修订。'));
+ const form=el('div','supplement card-supplement'),input=el('textarea'),button=el('button','','预览整项替换'),feedback=el('div','supplement-preview card-supplement-feedback');
+ input.rows=5;input.placeholder='粘贴完整的'+label+'，可包含多行或多个条目';input.setAttribute('aria-label','自定义替换'+label);input.value=override?.text||'';input.addEventListener('input',discardSupplementPreview);
+ button.type='button';feedback.hidden=true;feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');form.append(input,button,feedback);details.append(form);
+ button.onclick=()=>{if(state.busy)return;discardSupplementPreview();try{
+  const preview=state.reviewApi.previewCustomSection(state.task,group.factIds,input.value);openSupplementFeedback(feedback);state.supplementPreview=preview;
+  feedback.append(el('h4','','整项替换预览 · '+label),el('p','supplement-note','以下各处将全部采用你填写的内容。旧条目不再保留；这属于用户自定义内容，不是合同自动提取结论。'));
+  for(const entry of preview.entries)feedback.append(el('strong','',entry.name),el('p','','当前内容：'),el('blockquote','section-evidence',entry.before),el('p','','替换后完整内容：'),el('blockquote','section-evidence',entry.after));
+  const apply=el('button','primary-button','确认整项替换'),cancel=el('button','text-button','取消');apply.type=cancel.type='button';
+  apply.onclick=()=>{if(state.busy||state.supplementPreview!==preview)return;try{state.task=state.reviewApi.applyCustomSection(state.task,preview);reviewEdited('已整项替换'+label+'并同步相关物料。Word 保留审阅修订，可撤销。');}catch(error){showSupplementIssue(error,feedback);}};
+  cancel.onclick=discardSupplementPreview;feedback.append(apply,cancel);feedback.scrollIntoView({block:'nearest'});
+ }catch(error){showSupplementIssue(error,feedback);}};
+ if(override){const undo=el('button','text-button','撤销自定义替换');undo.type='button';undo.onclick=()=>{if(state.busy)return;try{state.task=state.reviewApi.undoCustomSection(state.task,override.id);reviewEdited('已撤销'+label+'自定义替换，恢复此前核对结果。');}catch(error){showError(error);}};details.append(undo);}
+ return details;
+}
 function renderGroup(group,section=sectionReview(group)){
- const fs=groupFacts(group),pending=fs.some(f=>f.status!=='verified'),confirmed=fs.some(isConfirmed),changed=fs.some(factChanged),adopted=fs.some(f=>f.sectionOverrideId),noFee=fs.some(f=>f.key==='performance_policy'&&f.policyMode==='none'&&f.status==='verified'),status=pending||sectionPending(section)?'pending':confirmed||sectionConfirmed(section)?'confirmed':changed?'changed':'verified';
+ const fs=groupFacts(group),custom=customSectionFor(group),customizable=canCustomizeSection(group),pending=fs.some(f=>f.status!=='verified'),confirmed=fs.some(isConfirmed),changed=fs.some(factChanged),adopted=fs.some(f=>f.sectionOverrideId),noFee=fs.some(f=>f.key==='performance_policy'&&f.policyMode==='none'&&f.status==='verified'),status=custom?'changed':pending||sectionPending(section)?'pending':confirmed||sectionConfirmed(section)?'confirmed':changed?'changed':'verified';
  const label=scopedGroupLabel(group),row=el('article','fact-row');row.dataset.groupId=group.id;const head=el('div','fact-heading');head.append(el('strong','',label),el('span','badge '+status,({pending:'保留待核',confirmed:'已确认无误',changed:'已修改',verified:'原样保留'})[status]));const count=new Set(fs.flatMap(f=>(f.occurrences||[]).map(o=>o.materialId+'|'+o.paragraphId))).size;head.append(el('small','',`关联 ${count} 处`));row.append(head);
- const values=[...new Set(fs.filter(f=>f.value!==null&&f.value!==undefined).map(f=>f.feeTextOverrideId?String(f.value):fs.length>1||group.kind==='opening'?readableFact(f):String(f.value)))];row.append(el('p','fact-value',adopted?sectionAdoptedText(section):confirmed?(values.length?values.join('\n')+'\n其余原值已确认无误':'已确认保留各模板原值'):section?.preferCompleteEvidence?'建议按完整合同条款核对':values.length?values.join('\n'):'保留各模板原值'));
+ const values=[...new Set(fs.filter(f=>f.value!==null&&f.value!==undefined).map(f=>f.feeTextOverrideId?String(f.value):fs.length>1||group.kind==='opening'?readableFact(f):String(f.value)))];row.append(el('p','fact-value',custom?custom.text:adopted?sectionAdoptedText(section):confirmed?(values.length?values.join('\n')+'\n其余原值已确认无误':'已确认保留各模板原值'):section?.preferCompleteEvidence?'建议按完整合同条款核对':values.length?values.join('\n'):'保留各模板原值'));
  const reasons=[...new Set(fs.map(f=>f.reason).filter(Boolean))];if(!section?.preferCompleteEvidence)for(const reason of reasons)row.append(el('p','fact-reason',reason));
- if(section)renderSectionReview(row,section);
+ if(custom)row.append(el('p','fact-reason','已自定义替换'));else if(section)renderSectionReview(row,section);
  const details=el('details');details.append(el('summary','',section?'查看完整合同依据与物料位置':'查看依据与物料位置'));
- for(const evidence of section?.evidence||[]){const label=`完整合同依据 · 共 ${evidence.itemCount} 项`+(evidence.noteCount?`＋${evidence.noteCount} 段补充说明`:'')+(evidence.duplicateCount>0?` · 合同中 ${evidence.duplicateCount+1} 处内容一致，已合并展示`:'');if(evidence.variantRole==='other_version'){const alternate=el('details');alternate.append(el('summary','','其他版本依据 · 共 '+evidence.itemCount+' 项'),el('p','',label),el('blockquote','section-evidence',evidence.quote));details.append(alternate);}else details.append(el('p','',label),el('blockquote','section-evidence',evidence.quote));}
+ if(customizable&&section?.evidence?.length)renderInvestmentEvidence(details,section);
+ else for(const evidence of section?.evidence||[]){const label=`完整合同依据 · 共 ${evidence.itemCount} 项`+(evidence.noteCount?`＋${evidence.noteCount} 段补充说明`:'')+(evidence.duplicateCount>0?` · 合同中 ${evidence.duplicateCount+1} 处内容一致，已合并展示`:'');if(evidence.variantRole==='other_version'){const alternate=el('details');alternate.append(el('summary','','其他版本依据 · 共 '+evidence.itemCount+' 项'),el('p','',label),el('blockquote','section-evidence',evidence.quote));details.append(alternate);}else details.append(el('p','',label),el('blockquote','section-evidence',evidence.quote));}
  const seenEvidence=new Set();for(const f of fs)for(const e of(f.evidence||[])){if(section?.evidence?.length&&sourceTitle(e)==='合同依据')continue;const k=e.blockId+'|'+e.quote;if(seenEvidence.has(k))continue;seenEvidence.add(k);details.append(el('p','',sourceTitle(e)),el('blockquote','',e.quote||''));}
+ if(customizable)details.append(el('h4','','物料原文与当前结果'));
  const factIds=new Set(group.factIds);for(const m of state.task.materials)for(const field of m.fields.filter(f=>f.factIds?.some(id=>factIds.has(id)))){const occurrence=el('div','occurrence');occurrence.append(el('strong','',m.template.name+' · '+field.label));if(noFee){occurrence.append(el('p','',field.after||'已移除旧计提说明；采用合同不提取业绩报酬的结论。'));}else if(field.before!==field.after){const b=el('p'),a=el('p');b.append(el('del','',field.before));a.append(el('ins','',field.after??field.before));occurrence.append(b,a);}else occurrence.append(el('p','',field.before));details.append(occurrence);}row.append(details);
- if(!adopted&&!(sectionCanAdopt(section)&&section?.needsReview)&&!section?.preferCompleteEvidence&&group.members?.length>1&&fs.some(canSupplement)){
+ if(customizable||!adopted&&!(sectionCanAdopt(section)&&section?.needsReview)&&!section?.preferCompleteEvidence&&group.members?.length>1&&fs.some(canSupplement)){
   const edits=el('details');edits.append(el('summary','','分别补充原文'),el('p','supplement-note','各处原话术分别保留。补充只更新所选原文，不覆盖其他段落。'));
-  for(const [i,member]of group.members.entries()){
-   if(!groupFacts(member).some(canSupplement))continue;
+  if(custom||adopted)edits.append(el('p','supplement-note','当前已整项替换。如需分别补充原文，请先撤销整项替换。'));
+  for(const [i,member]of (custom||adopted?[]:group.members||[group]).entries()){
+   if(!customizable&&!groupFacts(member).some(canSupplement))continue;
    const records=(state.task._records||[]).filter(r=>member.factIds.includes(r.f.id));
    const originals=records.length?records.map(r=>({name:r.m.template.name,text:r.atom.before})):state.task.materials.flatMap(m=>m.fields.filter(f=>f.factIds?.some(id=>member.factIds.includes(id))).map(f=>({name:m.template.name,text:f.before})));
    edits.append(el('p','fact-reason','原文 '+(i+1)+' · '+[...new Set(originals.map(o=>o.name))].join('、')));
@@ -228,11 +267,12 @@ function renderGroup(group,section=sectionReview(group)){
   }
   row.append(edits);
  }else if(!adopted&&!(sectionCanAdopt(section)&&section?.needsReview)&&!section?.preferCompleteEvidence&&!group.members&&(fs.some(canSupplement)||['date','performance','benchmark','code','opening'].includes(group.kind)))row.append(supplementForm(group,label));
+ if(customizable)row.append(customSectionControl(group,label));
  const feeTextId=fs.find(f=>f.feeTextOverrideId)?.feeTextOverrideId;if(feeTextId){const undo=el('button','text-button','撤销整段修改');undo.type='button';undo.onclick=()=>{if(state.busy)return;try{state.task=state.reviewApi.undoFeeTextSupplement(state.task,feeTextId);reviewEdited('已撤销整段修改，恢复此前核对结果。');}catch(error){showError(error);}};row.append(undo);}
  if(pending||confirmed){const actions=el('div','fact-actions'),confirm=el('button','text-button',confirmed&&!pending?'撤销确认':'确认无误');confirm.type='button';confirm.setAttribute('aria-label',(confirmed&&!pending?'撤销确认':'确认无误')+'：'+label);confirm.onclick=()=>{if(state.busy)return;try{const undo=confirmed&&!pending;state.task=state.reviewApi.confirmFacts(state.task,group.factIds,!undo);reviewEdited(undo?'已撤销确认，对应原值恢复待核标记。':'已确认原值无误。PPT 和海报不再添加对应待核标黄或批注，Word 已有审阅修订继续保留。');}catch(error){showError(error);}};actions.append(confirm,el('span','','确认原值；保留 Word 本轮修订'));row.append(actions);}
  return row;
 }
-function renderFacts(){discardSupplementPreview();const box=$('facts-list');box.replaceChildren();let count=0;for(const group of groups()){const fs=groupFacts(group),section=sectionReview(group),pending=fs.some(f=>f.status!=='verified')||sectionPending(section);if(!(state.filter==='all'||state.filter==='focus'&&(pending||sectionConfirmed(section)||fs.some(f=>factChanged(f)||isConfirmed(f)||f.source==='user'))||state.filter==='pending'&&pending))continue;box.append(state.reviewApi?.getSupplementGroups?renderGroup(group,section):renderFact(fs[0]));count++;}if(!count)box.append(el('div','empty-state','当前筛选下没有要素。'));document.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('selected',b.dataset.filter===state.filter));}
+function renderFacts(){discardSupplementPreview();const box=$('facts-list');box.replaceChildren();let count=0;for(const group of groups()){const fs=groupFacts(group),section=sectionReview(group),pending=fs.some(f=>f.status!=='verified')||sectionPending(section);if(!(state.filter==='all'||state.filter==='focus'&&(pending||sectionConfirmed(section)||fs.some(f=>factChanged(f)||isConfirmed(f)||f.source==='user'||f.source==='user_custom_section'))||state.filter==='pending'&&pending))continue;box.append(state.reviewApi?.getSupplementGroups?renderGroup(group,section):renderFact(fs[0]));count++;}if(!count)box.append(el('div','empty-state','当前筛选下没有要素。'));document.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('selected',b.dataset.filter===state.filter));}
 function showSupplementPreview(preview,origin={}){
  const box=origin.box||$('supplement-preview');openSupplementFeedback(box);state.supplementPreview=preview;box.append(el('h4','','识别结果'+(origin.label?' · '+origin.label:'')));
  if(origin.note)box.append(el('p','supplement-note',origin.note));const unique=new Set();for(const update of preview.updates||[]){const fact=state.task.facts.find(f=>f.id===update.factId),text=readableFact({...fact,...update});if(!unique.has(text)){box.append(el('p','parsed-value',text));unique.add(text);}}
@@ -286,7 +326,7 @@ async function selectCalendar(files){
  clearCalendarImport();$('supplement-notice').hidden=true;$('error-panel').hidden=true;$('calendar-status').textContent='此文件未导入，已有补充与核对结果保留。';
  if(list.length!==1){showError(new Error('每次请拖入或选择一份 XLSX 产品日历。'));return;}
  const file=list[0];if(!/\.xlsx$/i.test(file.name)||file.size>30*1024*1024){showError(new Error('请选择30 MB以内的 XLSX 产品日历。'));return;}
- setBusy(true);$('calendar-status').textContent='正在本机读取产品日历…';await nextPaint();try{const {readProductCalendar,matchCalendarRows,calendarSupplementText,calendarOpeningRange}=await import('./calendar-import.js?v=20261027-equal-fees');state.calendarSupplementText=calendarSupplementText;state.calendarOpeningRange=calendarOpeningRange;const calendar=await readProductCalendar({name:file.name,bytes:new Uint8Array(await file.arrayBuffer())});state.calendar=calendar;const matches=matchCalendarRows(calendar,state.task.target.name);state.calendarMatches=matches.map(r=>r.id);const select=$('calendar-row');select.replaceChildren();const blank=el('option','','请选择产品行');blank.value='';select.append(blank);for(const row of [...matches,...calendar.rows.filter(r=>!state.calendarMatches.includes(r.id))]){const option=el('option','',(state.calendarMatches.includes(row.id)?'匹配产品 · ':'')+row.productName+(row.productCode?' · '+row.productCode:'')+' · 第'+row.source.row+'行');option.value=row.id;select.append(option);}select.hidden=false;$('calendar-row-label').hidden=false;$('calendar-row-detail').replaceChildren();$('calendar-status').textContent=`已读取 ${calendar.rows.length} 条产品记录。`+(matches.length===1?'已定位到合同产品，请核对解析结果。':matches.length>1?'同一产品有多条记录，请选择本次所用行。':'未找到合同产品的对应行，可手动选择并核对，或使用文字补充。')+(calendar.warnings?.length?' '+calendar.warnings.join('；'):'');select.value=matches.length===1?matches[0].id:'';if(select.value)previewCalendarRow();}
+ setBusy(true);$('calendar-status').textContent='正在本机读取产品日历…';await nextPaint();try{const {readProductCalendar,matchCalendarRows,calendarSupplementText,calendarOpeningRange}=await import('./calendar-import.js?v=20261027-custom-investment');state.calendarSupplementText=calendarSupplementText;state.calendarOpeningRange=calendarOpeningRange;const calendar=await readProductCalendar({name:file.name,bytes:new Uint8Array(await file.arrayBuffer())});state.calendar=calendar;const matches=matchCalendarRows(calendar,state.task.target.name);state.calendarMatches=matches.map(r=>r.id);const select=$('calendar-row');select.replaceChildren();const blank=el('option','','请选择产品行');blank.value='';select.append(blank);for(const row of [...matches,...calendar.rows.filter(r=>!state.calendarMatches.includes(r.id))]){const option=el('option','',(state.calendarMatches.includes(row.id)?'匹配产品 · ':'')+row.productName+(row.productCode?' · '+row.productCode:'')+' · 第'+row.source.row+'行');option.value=row.id;select.append(option);}select.hidden=false;$('calendar-row-label').hidden=false;$('calendar-row-detail').replaceChildren();$('calendar-status').textContent=`已读取 ${calendar.rows.length} 条产品记录。`+(matches.length===1?'已定位到合同产品，请核对解析结果。':matches.length>1?'同一产品有多条记录，请选择本次所用行。':'未找到合同产品的对应行，可手动选择并核对，或使用文字补充。')+(calendar.warnings?.length?' '+calendar.warnings.join('；'):'');select.value=matches.length===1?matches[0].id:'';if(select.value)previewCalendarRow();}
  catch(error){$('calendar-status').textContent='此文件未导入，已有补充与核对结果保留。';showError(error);}finally{$('calendar-input').value='';setBusy(false);}
 }
 $('calendar-input').addEventListener('change',e=>selectCalendar(e.target.files));
@@ -310,8 +350,10 @@ function deliveryNotes(task,result){return [...(task.warnings||[]).map(w=>typeof
 function reviewText(task,result){
  const lines=['物料审阅清单',`目标产品：${task.target.name}`,`制作月份：${task.month}`,`公司介绍：${state.company?.name||'未使用'}`,'','本次更新产品要素及匹配到的一页通公司介绍；历史业绩及人员介绍保持原样。','黄色表示原值仍需确认，不代表合同已核实。','','输出文件：',...result.files.map(f=>f.name),'','核对事项：'];
  const sections=groups().map(group=>({group,section:sectionReview(group)})).filter(x=>x.section),coveredIds=new Set(sections.flatMap(x=>x.group.factIds));
- for(const f of task.facts){lines.push(`${f.label}｜${f.status==='verified'?(isConfirmed(f)?'用户确认原值':f.source==='user_calendar'?'产品日历补充':f.source==='user'?'用户补充':f.source==='company'?'公司介绍依据':'合同核对'):'保留待核'}｜${f.value??'保留各模板原值'}`,f.reason||'');for(const e of(f.evidence||[]).filter(e=>!coveredIds.has(f.id)||sourceTitle(e)!=='合同依据').slice(0,2))lines.push(sourceTitle(e)+'：'+e.quote);lines.push('');}
- for(const {section}of sections){
+ for(const f of task.facts){lines.push(`${f.label}｜${f.status==='verified'?(isConfirmed(f)?'用户确认原值':f.source==='user_calendar'?'产品日历补充':f.source==='user_custom_section'?'用户自定义整项替换':f.source==='user'?'用户补充':f.source==='company'?'公司介绍依据':'合同核对'):'保留待核'}｜${f.value??'保留各模板原值'}`,f.reason||'');for(const e of(f.evidence||[]).filter(e=>!coveredIds.has(f.id)||sourceTitle(e)!=='合同依据').slice(0,2))lines.push(sourceTitle(e)+'：'+e.quote);lines.push('');}
+ for(const {group,section}of sections){
+  const custom=customSectionFor(group);
+  if(custom){lines.push('',section.label+'｜用户自定义整项替换','以下内容由用户确认，不是合同自动提取结论：',custom.text,...custom.entries.map(e=>'应用位置：'+e.name));for(const evidence of section.evidence||[])lines.push('合同原文供核对：',evidence.quote);continue;}
   lines.push('',section.label+'｜'+(sectionPending(section)?'章节覆盖待核':sectionConfirmed(section)?'已核对差异，保留当前表述':'完整章节核对'),section.summary);
   for(const material of section.materials||[]){lines.push(material.name+`：已对应 ${material.matched}/${material.total} 项`);for(const item of [...(material.items||[]),...(material.extra||[])])lines.push((sectionStatus[item.status]||'需核对')+'｜'+(item.title||''),'合同：'+(item.contractText||'未找到明确对应条款'),'当前物料：'+(item.templateText||'未找到明确对应表述'),item.reason||'');}
   for(const evidence of section.evidence||[])lines.push('完整合同依据：',evidence.quote);
@@ -322,7 +364,7 @@ function reviewText(task,result){
 $('generate-button').onclick=async()=>{
  if(!state.task||state.busy||!state.monthValid)return;setBusy(true);$('error-panel').hidden=true;clearDownloads();generationStatus('正在生成物料，请稍候…');$('generate-button').textContent='正在生成…';await nextPaint();
  try{
-  const {writeTask}=await import('./office-writer.js?v=20261027-equal-fees');const result=await writeTask(state.task);generationStatus(`已完成 ${result.files.length} 份物料，正在准备下载包…`);const zip=new globalThis.JSZip();for(const file of result.files)zip.file(file.name,file.bytes);zip.file('审阅清单.txt','\uFEFF'+reviewText(state.task,result));const bundle=await zip.generateAsync({type:'uint8array',compression:'DEFLATE'});
+  const {writeTask}=await import('./office-writer.js?v=20261027-custom-investment');const result=await writeTask(state.task);generationStatus(`已完成 ${result.files.length} 份物料，正在准备下载包…`);const zip=new globalThis.JSZip();for(const file of result.files)zip.file(file.name,file.bytes);zip.file('审阅清单.txt','\uFEFF'+reviewText(state.task,result));const bundle=await zip.generateAsync({type:'uint8array',compression:'DEFLATE'});
   const issues=deliveryIssues(state.task,result),box=$('download-list');box.append(el('p','download-success',`已生成 ${result.files.length} 份物料，可下载审阅。`));const bundleLink=downloadLink(bundle,'application/zip',`${state.task.target.shortName||'产品物料'}_${state.task.month}.zip`,box);for(const file of result.files)downloadLink(file.bytes,file.mime,file.name,box);changeStep('download');
   for(const note of deliveryNotes(state.task,result))box.append(el('p','delivery-note',note));
   generationStatus((issues.length?`已生成 ${result.files.length} 份，${issues.length} 份未生成，原因见下方。`:'已生成。')+'若未自动开始下载，请点击下方下载包或单个文件。',issues.length?'warning':'success');box.scrollIntoView({block:'nearest'});
