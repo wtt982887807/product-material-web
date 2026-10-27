@@ -461,6 +461,46 @@ test('fee card accepts complete wording over a single-rate template and offers u
  await buttonIn(entry.form,'确认并应用补充').click();assert.equal(app.state.task.materials[0].fields.find(f=>f.label==='退出费率').after,full);
  entry=supplementEntry(app,'退出费率');assert.ok(entry.input);await buttonIn(app.elements.get('facts-list'),'撤销整段修改').click();assert.equal(app.state.task.materials[0].fields.find(f=>f.label==='退出费率').after,'退出费率0.5%。');
 });
+test('investment range and ratio cards offer an explicit complete custom replacement with preview and undo',async()=>{
+ for(const label of ['投资比例','投资范围']){
+  const old='（1）债券：0%—80%；\n（2）公募基金：0%—80%；\n（3）衍生品：0%—20%。';
+  const app=createApp({taskFactory:(c,t,o)=>sectionCaseTask(c,t,o,{label,value:old,clauses:[]})});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+  const card=()=>app.elements.get('facts-list').children.find(n=>descendants(n).some(c=>c.tagName==='strong'&&c.textContent===label));
+  assert.ok(descendants(card()).some(n=>n.tagName==='summary'&&n.textContent==='分别补充原文'));
+  assert.ok(descendants(card()).some(n=>n.tagName==='summary'&&n.textContent==='自定义替换'));
+  let input=descendants(card()).find(n=>n['aria-label']==='自定义替换'+label);assert.ok(input);
+  input.value='（1）债券：20%—100%；\n（2）货币市场工具：0%—80%。';
+  await buttonIn(card(),'预览整项替换').click();assert.equal(app.state.task.materials[0].fields[1].after,old);
+  const confirmed=buttonIn(card(),'确认整项替换');assert.ok(confirmed);await confirmed.click();
+  assert.equal(app.state.task.materials[0].fields[1].after,input.value);
+  assert.ok(descendants(card()).some(n=>n.textContent==='已自定义替换'));
+  assert.ok(!buttonIn(card(),'预览采用合同投资比例'));
+  await buttonIn(card(),'撤销自定义替换').click();assert.equal(app.state.task.materials[0].fields[1].after,old);
+ }
+});
+
+test('custom replacement ignores empty input and invalidates preview after text changes',async()=>{
+ const app=createApp({taskFactory:(c,t,o)=>sectionCaseTask(c,t,o,{label:'投资比例',value:'原投资比例条目。',clauses:[]})});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ const box=app.elements.get('facts-list'),input=descendants(box).find(n=>n['aria-label']==='自定义替换投资比例');assert.ok(input);
+ await buttonIn(box,'预览整项替换').click();assert.ok(!buttonIn(box,'确认整项替换'));assert.equal(app.state.task.materials[0].fields[1].after,'原投资比例条目。');
+ input.value='本计划投资债券80%以上。';await buttonIn(box,'预览整项替换').click();const apply=buttonIn(box,'确认整项替换');assert.ok(apply);
+ input.value='本计划投资债券90%以上。';await input.dispatch('input');await apply.click();assert.equal(app.state.task.materials[0].fields[1].after,'原投资比例条目。');
+});
+
+test('investment evidence shows one full version and folds repeated other positions with differences',async()=>{
+ const app=createApp({taskFactory:(c,t,o)=>sectionCaseTask(c,t,o,{label:'投资范围',value:'旧范围：债券与基金。',clauses:[]})});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ const primary='投资范围\n债券。\n货币市场工具。\n特别揭示：债券回购风险。',alternate='投资范围\n债券。\n货币市场工具。';
+ app.state.reviewApi={...app.state.reviewApi,getSectionReview:(t,ids)=>t.facts.find(f=>f.id===ids[0])?.key==='investment_scope'?{id:'scope-view',key:'investment_scope',label:'投资范围',factIds:ids,materials:[],summary:'请核对完整范围。',needsReview:true,evidence:[{blockId:'body',quote:primary,itemCount:2,noteCount:1},{blockId:'annex',quote:alternate,itemCount:2,noteCount:0}]}:null};
+ app.renderReview();const card=app.elements.get('facts-list').children.find(n=>descendants(n).some(c=>c.tagName==='strong'&&c.textContent==='投资范围'));
+ const details=descendants(card).find(n=>n.tagName==='details'&&n.children.some(c=>c.tagName==='summary'&&/查看.*依据.*位置/.test(c.textContent)));
+ assert.equal(details.children.filter(n=>n.tagName==='blockquote'&&n.textContent===primary).length,1);
+ assert.equal(details.children.filter(n=>n.tagName==='blockquote'&&n.textContent===alternate).length,0,'alternate full quote must be folded');
+ const other=details.children.find(n=>n.tagName==='details'&&descendants(n).some(c=>c.textContent===alternate));assert.ok(other);
+ assert.ok(descendants(other).some(n=>n.tagName==='summary'&&/2段相同/.test(n.textContent)));
+ assert.ok(descendants(other).some(n=>/本处未含/.test(n.textContent)&&/特别揭示/.test(n.textContent)));
+ assert.ok(details.children.some(n=>n.tagName==='h4'&&n.textContent==='物料原文与当前结果'));
+});
+
 test('no-match and apply errors remain visible beside the triggering card',async()=>{
  const app=await pendingApp(),entry=supplementEntry(app,'产品代码');entry.input.value='000123';
  const api=app.state.reviewApi;app.state.reviewApi={...api,previewSupplement:()=>({updates:[],warnings:['未定位到对应位置']})};
