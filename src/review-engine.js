@@ -8,7 +8,8 @@ import {monthlyWeekdayPatterns,parseMonthlyWeekdayInput,monthlyWeekdayChanges} f
 import {resolveMonthlyDateRule} from './opening-rules.js?v=20261026-opening-strategy';
 export {getOpeningRuleReview} from './opening-rules.js?v=20261026-opening-strategy';
 import {getTradingDays} from './trading-calendar.js?v=20261026-openings';
-import {buildRedemptionTierIndex,matchTemplateRedemptionTier,resolveRedemptionTier} from './redemption-tiers.js?v=20261027-holding-fees';
+import {buildRedemptionTierIndex,matchTemplateRedemptionTier,resolveRedemptionTier} from './redemption-tiers.js?v=20261027-fee-text';
+import {previewFeeText,applyFeeText,refreshFeeTextOperations,releaseFeeText} from './fee-text-supplement.js?v=20261027-fee-text';
 const PRODUCT_END='(?:集合资金信托计划|集合资产信托计划|集合资产管理计划|单一资产管理计划|资产管理计划|证券投资基金|信托计划)';
 const NAME_LABEL=/^(?:产品名称|产品全称|信托名称|信托计划名称|基金名称|计划名称|资产管理计划名称|产品简称)$/;
 const MARKETING=/历史业绩|产品表现|累计增长|最新净值|成立以来|年化收益|产品举例|同策略|代表产品|获奖|金牛奖/;
@@ -509,7 +510,7 @@ function addOccurrence(task,m,field,p,atom,resolution){
 }
 function operationId(m){m._operationSequence=(m._operationSequence||0)+1;return 'op-'+m._operationSequence;}
 function renderRecord({m,field,p,atom,f,userRenderValue}){
- if(field.sectionOverrideId)return;
+ if(field.sectionOverrideId||field.feeTextOverrideId)return;
  const common={paragraphId:p.id,part:p.part,index:p.index,reason:f.reason,factIds:[f.id]};
  if(f.userConfirmed)return;
  if(atom.key==='opening_fixed_monthdays'&&f.status==='verified'&&userRenderValue===undefined){
@@ -590,6 +591,7 @@ function reviewParagraph(task,m,field,p,rs){
 }
 function finalize(task){
  refreshSectionOperations(task);
+ refreshFeeTextOperations(task);
  for(const m of task.materials){
   m.operations=m.operations.filter((o,i,arr)=>!arr.slice(0,i).some(a=>a.paragraphId===o.paragraphId&&a.kind===o.kind&&a.start===o.start&&a.before===o.before&&a.after===o.after));
   for(const field of m.fields){field.factIds=unique(field.factIds);const fs=field.factIds.map(id=>task.facts.find(f=>f.id===id));field.status=fs.some(f=>f.status==='conflict')?'conflict':fs.some(f=>f.status==='pending')?'pending':'verified';const replaces=m.operations.filter(o=>field.paragraphIds.includes(o.paragraphId)&&o.kind==='replace');field.after=field.paragraphIds.map(id=>{let t=m.template.paragraphs.find(p=>p.id===id)?.text||'';for(const o of replaces.filter(o=>o.paragraphId===id).sort((a,b)=>b.start-a.start))t=t.slice(0,o.start)+o.after+t.slice(o.start+o.before.length);return t;}).join('\n');if(field.source!=='company')field.reason=field.status==='verified'?(replaces.length?'合同有明确依据，最小范围更新。':'原值与已取得依据一致。'):'保留模板原值，关键参数标黄并添加批注。';}
@@ -718,6 +720,7 @@ function supplementChanges(task,preview){
  preview.changes=[...changes.values()];return preview;
 }
 function validateSupplement(fact,value,task,perOccurrence=false){
+ if(fact.feeTextOverrideId)throw new Error('此项已按整段文字修改，请在本卡片重新填写完整内容，或撤销整段修改后调整数字。');
  if(fact.sectionOverrideId)throw new Error('此项已采用合同内容；请先撤销采用，再单独补充。');
  const raw=String(value??'').trim();if(!raw)throw new Error('请输入补充值。');let accepted=raw;
  if(fact.key.endsWith('_fee')){if(!perOccurrence&&!(fact.redemptionTier?.condition&&!fact.redemptionTier.warning)&&feeNeedsConditions(task,fact))throw new Error('此项包含多个分档费率，请保留各档适用条件填写完整内容，不能填写一个数字更新所有档。');accepted=scalarFee(fact,raw);}
@@ -964,6 +967,27 @@ function previewDates(task,group,facts,raw){
  warnings.push(...openingDependencyInvalidations(task,updates,invalidRuleGroups).map(i=>i.reason));
  return{groupId:group.id,text:raw,updates,warnings:unique(warnings),notes:unique(notes),invalidRuleGroups};
 }
+function feeTextGroup(task,group){
+ const first=task.facts.find(f=>group.factIds.includes(f.id));
+ const scope=f=>JSON.stringify(Object.entries({...f.scope,condition:String(f.scope?.condition||'').startsWith('holding_days:')?'':f.scope?.condition||''}).sort(([a],[b])=>a.localeCompare(b)));
+ return{...group,factIds:task.facts.filter(f=>f.key===first?.key&&scope(f)===scope(first)).map(f=>f.id)};
+}
+export function previewCardSupplement(task,groupId,text){
+ const group=getSupplementGroups(task).find(g=>g.id===groupId);if(!group)throw new Error('该补充事项已变化，请重新核对。');
+ const facts=group.factIds.map(id=>task.facts.find(f=>f.id===id)),raw=String(text??'').trim();
+ if(facts.length&&facts.every(f=>f.key.endsWith('_fee'))&&unique(facts.map(f=>f.key)).length===1){
+  let scalar;try{scalar=scalarFee(facts[0],raw);}catch{}
+  const fullGroup=feeTextGroup(task,group),override=task.feeTextOverrides?.[facts[0].feeTextOverrideId];
+  if(scalar&&override){
+   const tokens=feeTokens(override.text,facts[0].key,false).filter(t=>t.key===facts[0].key);
+   if(tokens.length!==1)throw new Error('当前完整文字包含多个分档，请填写各档完整内容，不能用一个数字覆盖所有档。');
+   const token=tokens[0];return previewFeeText(task,fullGroup,override.text.slice(0,token.start)+scalar+override.text.slice(token.start+token.before.length),FEE_LABELS);
+  }
+  if(!scalar&&/[\u4e00-\u9fff]/.test(raw))return previewFeeText(task,fullGroup,raw,FEE_LABELS);
+ }
+ return previewSupplement(task,groupId,raw);
+}
+export function undoFeeTextSupplement(task,groupId){const group=getSupplementGroups(task).find(g=>g.id===groupId),id=task.facts.find(f=>group?.factIds.includes(f.id))?.feeTextOverrideId||groupId;return rebuildFacts(task,releaseFeeText(task,id));}
 export function previewSupplement(task,groupId,text){
  const group=getSupplementGroups(task).find(g=>g.id===groupId);if(!group)throw new Error('该补充事项已变化，请重新核对。');
  const facts=task.facts.filter(f=>group.factIds.includes(f.id)),raw=String(text).trim();let values={};
@@ -1047,6 +1071,11 @@ export function previewSupplementText(task,text){
 }
 export function applySupplementBatch(task,previews){
  if(!Array.isArray(previews)||!previews.length)throw new Error('没有可应用的补充内容。');
+ if(previews.some(p=>p.feeText)){
+  if(previews.length!==1)throw new Error('整段费率文字请在本卡片单独确认。');
+  const p=previews[0],g=getSupplementGroups(task).find(g=>g.id===p.groupId);if(!g)throw new Error('本项已变化，请重新预览。');
+  applyFeeText(task,p,previewFeeText(task,feeTextGroup(task,g),p.text,FEE_LABELS));return finalize(task);
+ }
  const prepared=new Map();
  for(const preview of previews)for(const update of preview.updates||[]){
   const f=task.facts.find(f=>f.id===update.factId);if(!f||update.key&&update.key!==f.key)throw new Error('补充对应的事项已经变化，请重新解析。');

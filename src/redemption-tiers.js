@@ -1,12 +1,13 @@
 // Holding-period redemption rates are a separate evidence path. A bare rate,
-// waiver, allocation percentage or a month/year threshold never becomes days.
+// waiver or allocation percentage never becomes a tier. Month/year intervals
+// keep their own units; no conversion to days (or between months and years).
 const norm=s=>String(s??'').normalize('NFKC').replace(/\s+/g,'').trim();
 const percent=/\d+(?:\.\d+)?\s*[%％]/g;
 const feeLabel=/(?:退出|赎回)费(?:费率|率)?/;
 const restricted=/临时|优惠|促销|特定投资者|部分投资者|特殊投资者|减免|以.{0,12}公告.{0,8}为准/;
 const reference=/底层(?:产品|基金|资管|资产)|标的(?:产品|基金)|目标(?:产品|基金)|举例|例如|比如|假设|计算示例|历史产品|同策略产品/;
-const extraApplicability=/违约|提前退出|强制退出|仅适用|仅限|特殊投资者|特定投资者|通过.{0,16}(?:银行|渠道)|额外条件|同时满足|且(?:需|须|持有|满足)/;
-const unitPattern='(自然日|交易日|工作日|天|日|个月|月|年)?';
+const extraApplicability=/违约|提前退出|强制退出|仅适用|仅限|特殊投资者|特定投资者|通过.{0,16}(?:银行|渠道)|额外条件|同时满足|且(?:需|须|满足)/;
+const unitPattern='(自然日|交易日|工作日|天|日|个自然月|自然月|个月|月|年)?';
 const numberPattern='(\\d+(?:\\.\\d+)?)';
 const comparison='(<=|>=|<|>|≤|≥|=)';
 const dimensions=['share','channel','issuer','period'];
@@ -54,15 +55,15 @@ function exactRateAtom(text,start,length,clause){
  return true;
 }
 function unitOf(units,source,defaultUnit){
- const values=units.filter(Boolean),all=values.join(' ');
- if(/月|年/.test(all))return{warning:'持有期限使用月或年，不能换算成持有天数。'};
- const kinds=new Set(values.map(u=>u==='交易日'?'trading_day':u==='工作日'?'working_day':'calendar_day'));
+ const values=units.filter(Boolean),kinds=new Set(values.map(u=>u==='交易日'?'trading_day':u==='工作日'?'working_day':/月/.test(u)?'calendar_month':u==='年'?'calendar_year':'calendar_day'));
  if(kinds.size>1)return{warning:'持有期限混合不同的日期单位，请核对适用口径。'};
  if(kinds.size)return{unit:[...kinds][0]};
+ const header=norm(source).match(/持有(?:期限|时间|期)\((?:单位[:：])?(个自然月|自然月|个月|月|年)\)/);if(header)return{unit:header[1]==='年'?'calendar_year':'calendar_month'};
+ if(/持有月数/.test(source))return{unit:'calendar_month'};if(/持有年数/.test(source))return{unit:'calendar_year'};
  if(/交易日/.test(source))return{unit:'trading_day'};
  if(/工作日/.test(source))return{unit:'working_day'};
  if(/自然日|持有天数/.test(source))return{unit:'calendar_day'};
- return defaultUnit?{unit:defaultUnit}:{warning:'持有期限未明确天数单位，请核对是自然日还是交易日。'};
+ return defaultUnit?{unit:defaultUnit}:{warning:'持有期限未明确单位，请核对自然日、交易日、月或年。'};
 }
 function bound(range,operator,value,reverse=false){
  const op=reverse?({'<':'>','>':'<','≤':'≥','≥':'≤','<=':'>=','>=':'<=','=':'='})[operator]:operator,n=Number(value);
@@ -71,26 +72,33 @@ function bound(range,operator,value,reverse=false){
 }
 function intervalKey(r){return`${r.unit}:${r.lowerInclusive?'[':'('}${r.lower??'-inf'},${r.upper??'+inf'}${r.upperInclusive?']':')'}`;}
 function intervalLabel(r){
- const unit=({calendar_day:'自然日',trading_day:'交易日',working_day:'工作日'})[r.unit],parts=[];
+ const unit=({calendar_day:'自然日',trading_day:'交易日',working_day:'工作日',calendar_month:'个月',calendar_year:'年'})[r.unit],parts=[];
  if(r.lower!==null)parts.push(`${r.lower}${unit}${r.lowerInclusive?'≤':'＜'}`);
- parts.push('持有天数');if(r.upper!==null)parts.push(`${r.upperInclusive?'≤':'＜'}${r.upper}${unit}`);
+ parts.push(/month|year/.test(r.unit)?'持有期限':'持有天数');if(r.upper!==null)parts.push(`${r.upperInclusive?'≤':'＜'}${r.upper}${unit}`);
  return parts.join('');
 }
 function parseCondition(source,defaultUnit){
- const original=String(source),raw=original.normalize('NFKC').replace(/\s/g,''),dayHint=/持有|(?:^|[^A-Za-z])[DT](?:[<>=≤≥]|$)|[<>=≤≥][DT]|\d+(?:自然日|交易日|工作日|天|日)/.test(raw);
+ const original=String(source),raw=original.normalize('NFKC').replace(/\s/g,''),dayHint=/持有|(?:^|[^A-Za-z])[DNT](?:[<>=≤≥]|$)|[<>=≤≥][DNT]|\d+(?:自然日|交易日|工作日|天|日|个月|月|年)/.test(raw);
  if(!dayHint&&!defaultUnit)return null;
- let text=raw.replace(/持有(?:天数|期限|时间|期)?(?:\(?[DT]\)?)?/g,'D').replace(/不少于|不低于|不小于|至少/g,'≥').replace(/不超过|不高于|不大于/g,'≤').replace(/不足|不满|未满|少于|小于/g,'<').replace(/超过|高于|大于/g,'>').replace(/D满/g,'D≥');
+ let text=raw.replace(/持有(?:天数|月数|年数|期限|时间|期)?(?:\(?[DNT]\)?)?/g,'D').replace(/不少于|不低于|不小于|至少/g,'≥').replace(/不超过|不高于|不大于/g,'≤').replace(/不足|不满|未满|少于|小于/g,'<').replace(/超过|高于|大于/g,'>').replace(/D满/g,'D≥').replace(/(^|[:：,，])满(?=\d)/g,'$1D≥');
+ const marked=new RegExp('(?:[DNT](?:在)?)?'+numberPattern+unitPattern+'\\((不含|含)\\)(?:至|到|[-~～])'+numberPattern+unitPattern+'\\((不含|含)\\)','g');
+ text=text.replace(marked,(_,a,au,ai,b,bu,bi)=>a+(au||'')+(ai==='含'?'≤':'<')+'D'+(bi==='含'?'≤':'<')+b+(bu||''));
  // A range contains the variable only once; match it before a one-sided bound.
- const chain=new RegExp(numberPattern+unitPattern+comparison+'[DT]'+comparison+numberPattern+unitPattern),direct=new RegExp('[DT]'+comparison+numberPattern+unitPattern),reverse=new RegExp(numberPattern+unitPattern+comparison+'[DT]');
+ const chain=new RegExp(numberPattern+unitPattern+comparison+'[DNT]'+comparison+numberPattern+unitPattern),direct=new RegExp('[DNT]'+comparison+numberPattern+unitPattern),reverse=new RegExp(numberPattern+unitPattern+comparison+'[DNT]'),sequence=new RegExp('[DNT]'+comparison+numberPattern+unitPattern+'(?:但|且|并且|并|,|，|、)?(?:[DNT])?'+comparison+numberPattern+unitPattern);
  const candidates=[],occupied=[];
+ for(const m of text.matchAll(new RegExp(sequence.source,'g'))){
+  const lower=op=>['>','≥','>='].includes(op),upper=op=>['<','≤','<='].includes(op);if(!((lower(m[1])&&upper(m[4]))||(upper(m[1])&&lower(m[4]))))return{condition:'uncertain:'+norm(original),label:original.trim(),warning:'持有期限的多个界限无法明确组合为一个区间。'};
+  const range={lower:null,lowerInclusive:false,upper:null,upperInclusive:false};bound(range,m[1],m[2]);bound(range,m[4],m[5]);candidates.push({range,units:[m[3],m[6]],match:m[0],index:m.index});occupied.push([m.index,m.index+m[0].length]);
+ }
  for(const m of text.matchAll(new RegExp(chain.source,'g'))){const range={lower:null,lowerInclusive:false,upper:null,upperInclusive:false};bound(range,m[3],m[1],true);bound(range,m[4],m[5]);candidates.push({range,units:[m[2],m[6]],match:m[0],index:m.index});occupied.push([m.index,m.index+m[0].length]);}
  for(const [re,reversed]of [[direct,false],[reverse,true]])for(const m of text.matchAll(new RegExp(re.source,'g'))){if(occupied.some(([a,b])=>m.index>=a&&m.index<b))continue;const range={lower:null,lowerInclusive:false,upper:null,upperInclusive:false};bound(range,reversed?m[3]:m[1],reversed?m[1]:m[2],reversed);candidates.push({range,units:[reversed?m[2]:m[3]],match:m[0],index:m.index});}
  if(!candidates.length){
-  const suffix=new RegExp('(?:[DT])?'+numberPattern+unitPattern+'(及以上|以上|及以下|以下|以内)');
+  const suffix=new RegExp('(?:[DNT])?'+numberPattern+unitPattern+'(及以上|以上|及以下|以下|以内)');
   for(const m of text.matchAll(new RegExp(suffix.source,'g'))){const range={lower:null,lowerInclusive:false,upper:null,upperInclusive:false};bound(range,/以上/.test(m[3])?'≥':'≤',m[1]);candidates.push({range,units:[m[2]],match:m[0],index:m.index});}
  }
- if(!candidates.length&&!/[DT][<>=≤≥]|[<>=≤≥][DT]|(?:持有|[DT]).{0,20}(?:不足|不满|未满|少于|小于|不少于|不超过|至少|满|以上|以下|以内)|\d+(?:自然日|交易日|工作日|天|日|个月|月|年)(?:至|到|[-~～])\d/.test(raw))return null;
+ if(!candidates.length&&!/[DNT][<>=≤≥]|[<>=≤≥][DNT]|(?:持有|[DNT]).{0,20}(?:不足|不满|未满|少于|小于|不少于|不超过|至少|满|以上|以下|以内)|\d+(?:自然日|交易日|工作日|天|日|个月|月|年)?(?:至|到|[-~～])\d/.test(raw))return null;
  if(candidates.length!==1)return{condition:'uncertain:'+norm(original),label:original.trim(),warning:'持有天数条件无法唯一识别，请核对区间边界和适用条件。'};
+ const remainder=text.slice(0,candidates[0].index)+text.slice(candidates[0].index+candidates[0].match.length);if(/[<>=≤≥]\d+(?:\.\d+)?(?:自然日|交易日|工作日|天|日|个月|月|年)|(?:或|或者).{0,12}[<>=≤≥]|(?:且|并且)D/.test(remainder))return{condition:'uncertain:'+norm(original),label:original.trim(),warning:'持有期限还有无法对应的区间界限或其他持有条件，不能仅采用其中一端。'};
  const item=candidates[0],units=unitOf(item.units,original,defaultUnit);
  if(units.warning)return{condition:'uncertain:'+norm(original),label:original.trim(),warning:units.warning};
  const range={...item.range,unit:units.unit};
@@ -151,7 +159,7 @@ export function buildRedemptionTierIndex(contract){
    if(!entries.some(e=>/[%％]/.test(e.text)))for(const cell of entries){const h=heading(cell.text);if(h){if(h.own)tableExcluded=false;if(h.excluded)tableExcluded=true;tableScope={...tableScope,...h.scope};}}
    const rowScopes=entries.map(e=>scopeAt(e.text)),ambiguousScope=dimensions.some(k=>new Set(rowScopes.map(s=>s[k]).filter(Boolean)).size>1);
    if(!ambiguousScope)for(const cell of entries)for(const block of cell.blocks)addUniformPolicy(index,block,{scope:{...contexts.get(block).scope,...tableScope,...Object.assign({},...rowScopes)},excluded:contexts.get(block).excluded||tableExcluded});
-   const holding=entries.find(e=>/持有(?:天数|期限|时间|期)/.test(e.text)&&!/[<>=≤≥]|不足|不满|少于|不少于/.test(e.text));
+   const holding=entries.find(e=>/持有(?:天数|月数|年数|期限|时间|期)/.test(e.text)&&!/[<>=≤≥]|不足|不满|少于|不少于/.test(e.text));
    const fees=entries.filter(e=>feeLabel.test(e.text)&&!/%|％/.test(e.text));
    if(holding&&fees.length){holdingColumn=holding.column;feeColumns=fees;headerUnit=unitOf([],holding.text).unit;continue;}
    if(holdingColumn===null||!feeColumns.length)continue;
@@ -174,6 +182,7 @@ export function resolveRedemptionTier(index,tier,scope={}){
  if(tier.warning||!tier.range)return pending(tier.warning||'持有天数分档条件尚不明确。');
  if(dimensions.some(k=>scope[k]&&tier.scope?.[k]&&norm(scope[k])!==norm(tier.scope[k])))return pending('模板中的份额或渠道与当前核对口径不一致。');
  const effective={...scope,...tier.scope},entries=(index?.entries||[]).filter(e=>!e.excluded&&scopeCompatible(e.scope,effective)),related=entries.filter(e=>overlaps(e.range,tier.range));
+ if(entries.some(e=>e.range.unit!==tier.range.unit))return pending('合同与模板或不同合同条款使用了不同的持有期限单位，不能自动换算或混用。',mergeEvidence(entries.flatMap(e=>e.evidence)));
  const issues=(index?.issues||[]).filter(i=>!i.excluded&&scopeCompatible(i.scope,effective)&&(!i.tier.range||overlaps(i.tier.range,tier.range)));if(issues.length)return pending('合同还有单位或适用条件不明确的退出费率条款，请核对完整口径。',mergeEvidence(issues.flatMap(i=>i.evidence)));
  if(related.some(e=>dimensions.some(k=>e.scope[k]&&!effective[k])))return pending('合同退出费率存在不同份额或渠道口径，模板未明确适用对象。',mergeEvidence(related.flatMap(e=>e.evidence)));
  const exact=entries.filter(e=>e.condition===tier.condition),evidence=mergeEvidence((exact.length?[...exact,...related]:related).flatMap(e=>e.evidence));
