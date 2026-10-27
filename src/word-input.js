@@ -1,4 +1,4 @@
-import {readTemplate,readContract} from './office-reader.js?v=20261027-holding-fees';
+import {readTemplate,readContract} from './office-reader.js?v=20261027-fee-text';
 import {sha256,parseXml,elements} from './office-xml.js';
 
 const zipSignature=bytes=>bytes[0]===0x50&&bytes[1]===0x4b;
