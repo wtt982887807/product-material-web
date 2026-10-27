@@ -18,7 +18,7 @@ const rels=items=>`<Relationships xmlns="${PR}">${items.map(([id,type,target])=>
 async function fixture(kind,label){
  const word=kind==='docx',zip=new JSZip(),part=word?'word/document.xml':'ppt/slides/slide1.xml';
  const run=text=>word?`<w:r><w:rPr><w:rFonts w:eastAsia="宋体"/><w:sz w:val="20"/></w:rPr><w:t>${text}</w:t></w:r>`:`<a:r><a:rPr lang="zh-CN" sz="1400"><a:ea typeface="宋体"/></a:rPr><a:t>${text}</a:t></a:r>`;
- const paragraph=content=>word?`<w:p><w:pPr><w:spacing w:after="0"/><w:ind w:left="120"/></w:pPr>${content}</w:p>`:`<a:p><a:pPr marL="120" indent="0"/>${content}<a:endParaRPr lang="zh-CN"/></a:p>`;
+ const paragraph=content=>word?`<w:p><w:pPr><w:spacing w:after="0"/><w:ind w:left="120"/></w:pPr>${content}</w:p>`:`<a:p><a:pPr marL="120" indent="0" algn="just"/>${content}<a:endParaRPr lang="zh-CN"/></a:p>`;
  const cell=paragraphs=>word?`<w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/></w:tcPr>${paragraphs}</w:tc>`:`<a:tc><a:txBody><a:bodyPr/><a:lstStyle/>${paragraphs}</a:txBody><a:tcPr/></a:tc>`;
  const content=paragraph(run(old[0])+(word?'<w:r><w:br/></w:r>':'<a:br/>')+run(old[1]))+paragraph(run(old[2]))+paragraph(run(old[3]));
  const rows=[['产品名称',paragraph(run(name))],[label,content],['管理费',paragraph(run('管理费率0.6%/年'))]].map(([label,value])=>word?`<w:tr>${cell(paragraph(run(label)))}${cell(value)}</w:tr>`:`<a:tr h="914400">${cell(paragraph(run(label)))}${cell(value)}</a:tr>`).join('');
@@ -51,6 +51,10 @@ for(const kind of ['docx','pptx'])for(const [label,key]of [['投资比例','inve
  }else{assert.ok(!Object.keys(zip.files).some(p=>/^ppt\/comments\//.test(p)));assert.equal(elements(doc,A,'highlight').length,0);}
  const reread=await readTemplate({name:output.name,bytes:output.bytes}),updated=reread.rows.find(r=>r.label===label),currentPs=updated.cells[1].paragraphIds.map(id=>reread.paragraphs.find(p=>p.id===id));
  assert.equal(updated.value.trim(),replacement);assert.ok(old.slice(2).every(t=>!updated.value.includes(t)),'omitted old third and fourth clauses are gone');
- assert.deepEqual(currentPs.map(p=>serializeXml(elements(p.node,ns,'pPr')[0])),props);
+ if(kind==='pptx'){
+  assert.deepEqual(currentPs.filter(p=>p.text).map(p=>p.text),replacement.split('\n'),'custom pasted lines are separate paragraphs so justified text cannot stretch a forced break');
+  assert.equal(currentPs.flatMap(p=>elements(p.node,A,'br')).length,0,'no forced inline break remains in the custom replacement');
+  assert.deepEqual(currentPs.map(p=>serializeXml(elements(p.node,ns,'pPr')[0])),[props[0],props[0],...props.slice(1)],'each added paragraph copies the original alignment and spacing');
+ }else assert.deepEqual(currentPs.map(p=>serializeXml(elements(p.node,ns,'pPr')[0])),props);
  assert.equal(reread.rows.find(r=>r.label==='产品名称').value,name);assert.equal(reread.rows.find(r=>r.label==='管理费').value,'管理费率0.6%/年');assert.ok(reread.paragraphs.some(p=>p.text===note));assert.equal(reread.rows.length,template.rows.length);assert.deepEqual(file.bytes,original);
 });
