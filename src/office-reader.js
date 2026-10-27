@@ -203,7 +203,7 @@ export async function readContract(file) {
   const ext=String(file?.name||'').split('.').pop().toLowerCase();
   if(ext==='docx') {
     const doc=await readOfficeFile(file,{role:'contract'});
-    return {name:doc.name,sha256:doc.sha256,blocks:doc.paragraphs.filter(p=>p.text.trim()).map(p=>({id:p.id,text:p.text,part:p.part,paragraphIndex:p.index,page:p.page})),warnings:doc.warnings};
+    return {name:doc.name,sha256:doc.sha256,blocks:doc.paragraphs.filter(p=>p.text.trim()).map(p=>({id:p.id,text:p.text,part:p.part,paragraphIndex:p.index,page:p.page,...(p.tableId?{tableId:p.tableId,rowIndex:p.rowIndex,cellIndex:p.cellIndex}:{})})),warnings:doc.warnings};
   }
   if(ext!=='doc') throw new Error('合同请使用 DOCX 或旧 DOC 文件。');
   const bytes=copyBytes(file.bytes);
