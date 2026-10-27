@@ -83,7 +83,7 @@ function runPiece(run,text,kind,{deleted=false}={}) {
 function replaceNodeWith(node,pieces){const parent=node.parentNode;for(const piece of pieces)parent.insertBefore(piece,node);parent.removeChild(node);}
 function revision(doc,type,id,timestamp){const node=create(doc,W,`w:${type}`);setW(node,'id',id);setW(node,'author',AUTHOR);setW(node,'date',timestamp);return node;}
 
-const sectionReplacement=op=>op.kind==='replace'&&(op.source==='contract_section'||op.source==='user_fee_text');
+const sectionReplacement=op=>op.kind==='replace'&&['contract_section','user_fee_text','equal_fee_tiers'].includes(op.source);
 function sectionContent(entry,kind){
   const {paragraph,op}=entry,ns=kind==='docx'?W:A;
   if(op.start!==0||op.before!==textOf(paragraph,kind))failAt(entry,'整段文字更新必须准确对应整段原文');

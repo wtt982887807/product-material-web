@@ -3,11 +3,20 @@ const unique=a=>[...new Set(a)];
 const clean=s=>String(s??'').replace(/[\r\n\t]+/g,' ').replace(/ {2,}/g,' ').trim();
 const savedKeys=['value','status','source','reason','reasonType','evidence','userConfirmed','_confirmationBefore'];
 const snapshot=f=>Object.fromEntries(savedKeys.map(k=>[k,f[k]]));
+export function assertFeeActionScope(text,scope={}){
+ if(!scope.feeActions)return;
+ const labels=[...String(text).normalize('NFKC').matchAll(/(?:认[、/]?申购|认购|申购|参与|赎回|退出)(?:(?:费(?:用|率)?)?\s*[/、及和与]\s*(?:认购|申购|参与|赎回|退出))*费(?:用|率)?/g)].map(m=>m[0]);
+ if(!labels.length)return;
+ const actions=unique(labels.flatMap(s=>[...s.replace(/认[、/]?申购/g,'认购/申购').matchAll(/认购|申购|参与|赎回|退出/g)].map(m=>m[0]==='申购'?'参与':m[0]==='赎回'?'退出':m[0])));
+ const canonical=['认购','参与','退出'].filter(a=>actions.includes(a)).join('|');
+ if(canonical!==scope.feeActions)throw new Error('填写的认购、参与或退出费率口径与本卡片不一致，请保留本项完整费率名称，或只填写数字。');
+}
 function labelKeys(text,labels,trust){
  const hits=labels.flatMap(([key,re])=>[...text.matchAll(new RegExp(re.source,'g'))].map(m=>({key,start:m.index,end:m.index+m[0].replace(/率$/,'').length})));
  return unique(hits.filter(h=>!hits.some(o=>o!==h&&o.start<=h.start&&o.end>=h.end&&(o.start<h.start||o.end>h.end))).map(h=>h.key==='trust_total_fee'&&!trust?'management_fee':h.key==='management_fee'&&trust?'trust_manager_fee':h.key));
 }
 function checkExplicitScope(text,scope){
+ assertFeeActionScope(text,scope);
  const raw=text.normalize('NFKC'),shares=unique([...raw.matchAll(/([A-Z])类(?:份额)?/g)].map(m=>m[1]));
  const actors=unique([...raw.matchAll(/(代销机构|销售机构|销售银行|管理人|受托人)(?:收取的?|的)?[^，,。；;]{0,10}(?:费率|管理费|退出费|赎回费|报酬)/g)].map(m=>/代销|销售/.test(m[1])?'distributor':'manager'));
  const channels=unique([...raw.matchAll(/渠道[:：]\s*([^，,。；;:\n]{1,24})/g)].map(m=>m[1].trim()));
