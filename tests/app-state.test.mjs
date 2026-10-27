@@ -443,6 +443,16 @@ test('a successfully supplemented text card remains editable for a second correc
  entry=supplementEntry(app,'风险等级');entry.input.value='R1';await entry.form.onsubmit({preventDefault(){}});await buttonIn(entry.form,'确认并应用补充').click();
  assert.equal(app.state.task.materials[0].fields.find(f=>f.label==='风险等级').after,'R1（低风险）');
 });
+test('contract holding-day fee tiers share one card with an optional full-text supplement',async()=>{
+ const original='持有天数＜180自然日，退出费率1%；持有天数≥180自然日，退出费率0%。';
+ const app=createApp({taskFactory:(c,t,o)=>sectionCaseTask(c,t,o,{label:'退出费率',value:original.replace('1%','2%').replace('0%','1%'),clauses:[original]})});
+ await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ const cards=app.elements.get('facts-list').children.filter(n=>descendants(n).some(c=>c.tagName==='strong'&&c.textContent==='退出费率'));
+ assert.equal(cards.length,1);assert.ok(app.state.task.facts.filter(f=>f.key==='redemption_fee').every(f=>f.status==='verified'));
+ const entry=supplementEntry(app,'退出费率');entry.input.value=original;await entry.form.onsubmit({preventDefault(){}});
+ assert.equal(app.state.supplementPreview.updates.length,2);assert.ok(buttonIn(entry.form,'确认并应用补充'));
+ await buttonIn(entry.form,'确认并应用补充').click();assert.equal(app.state.task.materials[0].fields.find(f=>f.label==='退出费率').after,original);
+});
 test('no-match and apply errors remain visible beside the triggering card',async()=>{
  const app=await pendingApp(),entry=supplementEntry(app,'产品代码');entry.input.value='000123';
  const api=app.state.reviewApi;app.state.reviewApi={...api,previewSupplement:()=>({updates:[],warnings:['未定位到对应位置']})};

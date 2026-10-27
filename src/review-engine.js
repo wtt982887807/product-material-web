@@ -8,6 +8,7 @@ import {monthlyWeekdayPatterns,parseMonthlyWeekdayInput,monthlyWeekdayChanges} f
 import {resolveMonthlyDateRule} from './opening-rules.js?v=20261026-opening-strategy';
 export {getOpeningRuleReview} from './opening-rules.js?v=20261026-opening-strategy';
 import {getTradingDays} from './trading-calendar.js?v=20261026-openings';
+import {buildRedemptionTierIndex,matchTemplateRedemptionTier,resolveRedemptionTier} from './redemption-tiers.js?v=20261027-holding-fees';
 const PRODUCT_END='(?:集合资金信托计划|集合资产信托计划|集合资产管理计划|单一资产管理计划|资产管理计划|证券投资基金|信托计划)';
 const NAME_LABEL=/^(?:产品名称|产品全称|信托名称|信托计划名称|基金名称|计划名称|资产管理计划名称|产品简称)$/;
 const MARKETING=/历史业绩|产品表现|累计增长|最新净值|成立以来|年化收益|产品举例|同策略|代表产品|获奖|金牛奖/;
@@ -494,14 +495,15 @@ function addOccurrence(task,m,field,p,atom,resolution){
  if(atom.key==='opening_announced_date'){scope.period='announcement';scope.condition=[atom.dateEvent,atom.dateRole,norm(atom.before),atom.dateWindow||''].join('|');}
  if(atom.key.startsWith('investment_')||atom.key.startsWith('custom:')||['opening','lockup','duration'].includes(atom.key))scope.condition=norm(atom.before);
  const factKey=(atom.key==='risk_description'?'risk_rating':atom.key)+'|'+JSON.stringify(scope);
- const factLabel=atom.key==='performance_policy'?'业绩报酬':atom.key.startsWith('performance_ratio_')?'业绩报酬提成比例（第'+atom.key.match(/\d+$/)[0]+'档）':/^performance_R\d/.test(atom.key)?'业绩报酬基准 R'+atom.key.match(/\d+$/)[0]:field.label;
+ const factLabel=atom.redemptionTier?'退出费率（'+atom.redemptionTier.label+'）':atom.key==='performance_policy'?'业绩报酬':atom.key.startsWith('performance_ratio_')?'业绩报酬提成比例（第'+atom.key.match(/\d+$/)[0]+'档）':/^performance_R\d/.test(atom.key)?'业绩报酬基准 R'+atom.key.match(/\d+$/)[0]:field.label;
  let f=task._factMap.get(factKey);if(!f){f={id:'fact-'+(task.facts.length+1),key:atom.key,label:factLabel,value:resolution.value,status:resolution.status,evidence:resolution.evidence||[],scope,occurrences:[],reason:resolution.reason,reasonType:resolution.reasonType||(resolution.status==='verified'?'confirmed':'needs_review')};task.facts.push(f);task._factMap.set(factKey,f);}
- else if(atom.key==='opening_monthly_weekday'&&resolution.status!=='verified'&&f.status==='verified'){
+ else if((atom.key==='opening_monthly_weekday'||atom.redemptionTier)&&resolution.status!=='verified'&&f.status==='verified'){
   Object.assign(f,{value:null,status:resolution.status,reason:resolution.reason,reasonType:'needs_review'});
   for(const material of task.materials)material.operations=material.operations.filter(o=>!o.factIds?.includes(f.id));
   for(const record of task._records.filter(r=>r.f===f))renderRecord(record);
  }
  if(atom.key==='performance_policy'){f.policyMode=resolution.policyMode;if(resolution.source)f.source=resolution.source;}
+ if(atom.redemptionTier)f.redemptionTier=atom.redemptionTier;
  f.occurrences.push({materialId:m.materialId,paragraphId:p.id,fieldId:field.id});field.factIds.push(f.id);
  const record={m,field,p,atom,f};task._records.push(record);renderRecord(record);
 }
@@ -560,8 +562,10 @@ function reviewParagraph(task,m,field,p,rs){
  if(reviewPerformancePolicy(task,m,field,p,rs))return;
  const atoms=field.manualReviewReason?[{key:'custom:table_layout:'+labelNorm(field.label),start:0,before:p.text,value:p.text,manualReviewReason:field.manualReviewReason}]:atomsFor(field.label,p.text,task.target,keyFor(field.label)==='performance'?m._performanceText:field.before);
  for(const atom of atoms){let resolution;const aggregate=(atom.key.endsWith('_fee')||atom.key.startsWith('performance_'))&&AGGREGATE_LAYERS.test(field.label+' '+field.before);
+  if(atom.key==='redemption_fee'&&!aggregate){const tier=matchTemplateRedemptionTier(p.text,atom);if(tier){atom.redemptionTier=tier;atom.scope={...(atom.scope||scopeFor(field.label,p.text,atom.start)),...(tier.scope||{}),condition:'holding_days:'+String(tier.condition||norm(p.text))};}}
   if(aggregate)atom.scope={...(atom.scope||scopeFor(field.label,p.text,atom.start)),condition:'aggregate_layers'};
   if(atom.manualReviewReason)resolution={status:'pending',value:null,evidence:[],reasonType:'needs_review',reason:atom.manualReviewReason};
+  else if(atom.redemptionTier)resolution=resolveRedemptionTier(task._redemptionTierIndex,atom.redemptionTier,atom.scope);
   else if(atom.key==='warning_stop'){
    const a=resolveAtom('warning_line',field.label,rs,{},task.target),b=resolveAtom('stop_line',field.label,rs,{},task.target);
    resolution=a.status==='verified'&&b.status==='verified'?{status:'verified',value:`预警线${a.value}，止损线${b.value}`,evidence:[...a.evidence,...b.evidence],reason:'合同明确设置预警线和止损线。'}:resolveAtom(atom.key,field.label,rs,{},task.target,{original:p.text});
@@ -594,7 +598,7 @@ function finalize(task){
 }
 export function analyzeMaterials(contract,templates,{now,month}={}){
  const target=identity(contract),task={target,contract,templates,month:month||monthNow(now),facts:[],materials:[],warnings:[...(contract.warnings||[])],stats:{}};
- Object.defineProperties(task,{_factMap:{value:new Map()},_records:{value:[]}});
+ Object.defineProperties(task,{_factMap:{value:new Map()},_records:{value:[]},_redemptionTierIndex:{value:buildRedemptionTierIndex(contract)}});
  if(!target.name){task.warnings.push(target.reason);throw new Error(target.reason);}
  const rs=records(contract);
  for(const t of templates){
@@ -672,6 +676,23 @@ function feeOccurrencePreview(task,fact,raw,groupId){
  if(used.size!==candidates.length)throw new Error('补充中有模板未包含的分档条件；请核对完整条件后再应用。');
  return{groupId,text:raw,updates:[{factId:fact.id,key:fact.key,label:fact.label,value:raw,occurrenceValues}],warnings:[]};
 }
+function redemptionTierSupplement(task,group,facts,raw){
+ if(facts.length===1&&!facts[0].redemptionTier.warning&&/^\s*(?:(?:退出|赎回)费(?:费率|率)?\s*(?:为|是)?\s*[:：]?\s*)?\d+(?:\.\d+)?\s*[%％]?[。.]?\s*$/.test(raw.normalize('NFKC'))){
+  const fact=facts[0],preview=previewUpdates(task,facts,{redemption_fee:scalarFee(fact,raw)},raw,group.id);
+  for(const update of preview.updates)update.occurrenceValues=task._records.filter(r=>r.f===fact).map(r=>occurrenceValue(r,update.value));return supplementChanges(task,preview);
+ }
+ const candidates=feeTokens(raw,'redemption_fee',false).filter(t=>t.key==='redemption_fee').map(token=>({token,tier:matchTemplateRedemptionTier(raw,token)}));
+ if(!candidates.length||candidates.some(c=>!c.tier?.condition||c.tier.warning))throw new Error('请填写完整分档文字，包括每档持有天数和退出费率，例如“持有天数＜180自然日，退出费率1%；持有天数≥180自然日，退出费率0%”。');
+ if(new Set(candidates.map(c=>c.tier.condition)).size!==candidates.length)throw new Error('补充中存在重复或不同口径的持有期限，请保留各档条件后填写。');
+ const updates=[],used=new Set();
+ for(const fact of facts){
+  const matches=candidates.filter(c=>c.tier.condition===fact.redemptionTier.condition&&['share','channel','issuer'].every(k=>!c.tier.scope?.[k]||c.tier.scope[k]===fact.scope[k]));
+  if(matches.length!==1)throw new Error('补充内容与本卡片的持有期限无法逐档对应，请填写各档完整条件和费率；本次未修改。');
+  const {token}=matches[0];used.add(matches[0]);for(const update of previewUpdates(task,[fact],{redemption_fee:token.value},raw,group.id).updates){update.occurrenceValues=task._records.filter(r=>r.f===fact).map(r=>occurrenceValue(r,update.value));updates.push(update);}
+ }
+ if(used.size!==candidates.length)throw new Error('补充中有本卡片未包含的持有期限或份额，请核对后再应用。');
+ return supplementChanges(task,{groupId:group.id,text:raw,updates,warnings:[]});
+}
 function wholeOccurrencePreview(task,fact,raw,groupId){
  validateSupplement(fact,raw,task);const rs=task._records.filter(r=>r.f===fact),fields=new Map();
  for(const r of rs){const key=r.m.materialId+'|'+r.field.id;if(!fields.has(key))fields.set(key,[]);fields.get(key).push(r);}
@@ -699,7 +720,7 @@ function supplementChanges(task,preview){
 function validateSupplement(fact,value,task,perOccurrence=false){
  if(fact.sectionOverrideId)throw new Error('此项已采用合同内容；请先撤销采用，再单独补充。');
  const raw=String(value??'').trim();if(!raw)throw new Error('请输入补充值。');let accepted=raw;
- if(fact.key.endsWith('_fee')){if(!perOccurrence&&feeNeedsConditions(task,fact))throw new Error('此项包含多个分档费率，请保留各档适用条件填写完整内容，不能填写一个数字更新所有档。');accepted=scalarFee(fact,raw);}
+ if(fact.key.endsWith('_fee')){if(!perOccurrence&&!(fact.redemptionTier?.condition&&!fact.redemptionTier.warning)&&feeNeedsConditions(task,fact))throw new Error('此项包含多个分档费率，请保留各档适用条件填写完整内容，不能填写一个数字更新所有档。');accepted=scalarFee(fact,raw);}
  else if(fact.key.startsWith('performance_')&&fact.key!=='performance_policy'||fact.key==='benchmark'){if(!/^\d+(?:\.\d+)?\s*[%％]?$/.test(raw)||number(raw)>100)throw new Error('请填写0至100之间的费率数字，可带百分号。');accepted=raw.replace(/[％\s]/g,'').replace(/%$/,'')+'%';}
  else if(/^(?:minimum_amount|additional_amount|opening_cycle|opening_days|opening_monthday|lockup_days|duration_years)$/.test(fact.key)){
   if(['minimum_amount','additional_amount','lockup_days','duration_years'].includes(fact.key)){
@@ -745,14 +766,15 @@ const GROUP_KIND=f=>f.key==='performance_policy'?'performance_policy':f.key==='o
 export function getSupplementGroups(task){
  const groups=new Map();
  for(const f of task.facts){
-  const kind=GROUP_KIND(f),scope={...f.scope};let identity=f.id;
+  const kind=f.redemptionTier?'redemption_tiers':GROUP_KIND(f),scope={...f.scope};let identity=f.id;
+  if(kind==='redemption_tiers'){delete scope.condition;identity=kind+'|'+JSON.stringify(scope);}
   if(['performance','benchmark','code','opening','date'].includes(kind)){
    delete scope.condition;
    if(kind==='date'){scope.event=(f.scope.condition||'').split('|')[0]||'opening';if(scope.event==='sale')scope.event='opening';}
    // Whole unmatched prose has its own meaning and must not share a replacement.
    identity=kind==='opening'&&f.key==='opening'?f.id:kind+'|'+JSON.stringify(scope);
   }
-  const group=groups.get(identity)||{id:'supplement-'+f.id,label:({performance:'业绩报酬',benchmark:'业绩比较基准',code:'产品代码',opening:'开放期',date:({sale:'本次开售日',reservation:'本次预约日',opening:'本次开放日'})[scope.event]||'本次开放日'})[kind]||f.label,kind,factIds:[],scope};
+  const group=groups.get(identity)||{id:'supplement-'+f.id,label:({redemption_tiers:'退出费率',performance:'业绩报酬',benchmark:'业绩比较基准',code:'产品代码',opening:'开放期',date:({sale:'本次开售日',reservation:'本次预约日',opening:'本次开放日'})[scope.event]||'本次开放日'})[kind]||f.label,kind,factIds:[],scope};
   group.factIds.push(f.id);groups.set(identity,group);
  }
  return [...groups.values()].map(g=>{const fs=g.factIds.map(id=>task.facts.find(f=>f.id===id));return{...g,status:fs.some(f=>f.status==='conflict')?'conflict':fs.some(f=>f.status!=='verified')?'pending':'verified',userConfirmed:fs.filter(f=>f.userConfirmed).length>0};});
@@ -945,6 +967,7 @@ function previewDates(task,group,facts,raw){
 export function previewSupplement(task,groupId,text){
  const group=getSupplementGroups(task).find(g=>g.id===groupId);if(!group)throw new Error('该补充事项已变化，请重新核对。');
  const facts=task.facts.filter(f=>group.factIds.includes(f.id)),raw=String(text).trim();let values={};
+ if(group.kind==='redemption_tiers')return redemptionTierSupplement(task,group,facts,raw);
  if(facts.length===1&&facts[0].key.endsWith('_fee')&&feeNeedsConditions(task,facts[0]))return supplementChanges(task,feeOccurrencePreview(task,facts[0],raw,groupId));
  if(facts.length===1&&facts[0].key==='opening_fixed_monthdays')return supplementChanges(task,wholeOccurrencePreview(task,facts[0],raw,groupId));
  if(facts.length===1&&wholeSupplementKey(facts[0].key))values[facts[0].key]=raw;
