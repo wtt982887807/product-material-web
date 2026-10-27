@@ -25,7 +25,7 @@ test('three tiers support chained comparisons and preserve inclusive boundaries'
 
 test('controlled day synonyms match, without inferring days from months or years',()=>{
  for(const [before,expected]of [['持有期不足180天，赎回费率0.5%。','1%'],['持有期不满180天，赎回费率0.5%。','1%'],['持有期不少于180天，赎回费率0.5%。','0%'],['持有期满180天，赎回费率0.5%。','0%']])assert.equal(result([two],before,'0.5%').value,expected,before);
- for(const before of ['持有期不满6个月，退出费率1%。','持有期不足1年，退出费率1%。','D<180，退出费率1%。']){const t=matchTemplateRedemptionTier(before,atom(before,'1%'));assert.ok(t?.warning);assert.notEqual(resolveRedemptionTier(buildRedemptionTierIndex(contract([two])),t,{}).status,'verified');}
+ for(const before of ['持有期不满6个月，退出费率1%。','持有期不足1年，退出费率1%。','D<180，退出费率1%。']){const t=matchTemplateRedemptionTier(before,atom(before,'1%'));assert.ok(t);assert.notEqual(resolveRedemptionTier(buildRedemptionTierIndex(contract([two])),t,{}).status,'verified');}
  const trading='持有期不足180交易日，退出费率0.5%。';assert.notEqual(result([two],trading,'0.5%').status,'verified');
 });
 
@@ -143,4 +143,51 @@ test('uniform-policy fallback preserves scope and cannot hide conditional, confl
  for(const lines of [['三、底层基金概况','本计划不收取退出费。'],['临时优惠期间，本计划不收取退出费。'],['持有期超过180天时，本计划不收取退出费。'],['本计划退出费率统一不超过0.5%。'],['本计划不收取退出费。','本计划退出费率统一为0.5%。'],['本计划不收取退出费。','持有天数＜180自然日，退出费率不超过1%。']])assert.notEqual(result(lines,two,'1%').status,'verified',lines.join('\n'));
  const c=buildRedemptionTierIndex(contract(['A类份额','本计划不收取退出费。']));assert.equal(resolveRedemptionTier(c,tiers(two)[0],{share:'A'}).value,'0%');assert.equal(resolveRedemptionTier(c,tiers(two)[0],{share:'B'}).status,'pending');assert.equal(resolveRedemptionTier(c,tiers(two)[0],{}).status,'pending');
  const issuer=buildRedemptionTierIndex(contract(['代销机构费用','本计划不收取退出费。']));assert.equal(resolveRedemptionTier(issuer,tiers(two)[0],{issuer:'manager'}).status,'pending');
+});
+
+test('arbitrary 7 30 and 365 day boundaries and four tiers work in both prose and a table',()=>{
+ const text='持有天数D＜7自然日，退出费率1.5%；7自然日≤D＜30自然日，退出费率1%；30自然日≤D＜365自然日，退出费率0.5%；D≥365自然日，退出费率0%。';
+ const rows=table([['D＜7自然日','1.5%'],['7自然日≤D＜30自然日','1%'],['30自然日≤D＜365自然日','0.5%'],['D≥365自然日','0%']]);
+ for(const input of [[text],rows,[text,...rows]]){const c=buildRedemptionTierIndex(contract(input));assert.deepEqual(tiers(text).map(t=>resolveRedemptionTier(c,t,{}).value),['1.5%','1%','0.5%','0%']);}
+ const nText=text.replaceAll('D','N');assert.deepEqual(tiers(nText).map(t=>resolveRedemptionTier(buildRedemptionTierIndex(contract([text])),t,{}).value),['1.5%','1%','0.5%','0%']);
+});
+
+test('controlled middle-interval prose retains both bounds and matches a symbolic range',()=>{
+ const source='持有天数＜30自然日，退出费率1%；30自然日≤D＜90自然日，退出费率0.5%；D≥90自然日，退出费率0%。',c=buildRedemptionTierIndex(contract([source]));
+ for(const phrase of ['持有满30天不足90天','持有满30天但不足90天','持有期不少于30天且不满90天','满30天但不足90天','持有期在30天（含）至90天（不含）']){
+  const text=phrase+'，退出费率0.7%。',t=matchTemplateRedemptionTier(text,atom(text,'0.7%'));assert.equal(t.condition,'calendar_day:[30,90)',phrase);assert.equal(resolveRedemptionTier(c,t,{}).value,'0.5%',phrase);
+ }
+ const textual='持有期不足30天，退出费率1%；持有满30天但不足90天，退出费率0.5%；持有满90天，退出费率0%。';
+ const textIndex=buildRedemptionTierIndex(contract([textual]));assert.deepEqual(tiers(source).map(t=>resolveRedemptionTier(textIndex,t,{}).value),['1%','0.5%','0%']);
+});
+
+test('explicit inclusive and exclusive interval wording is retained and unmarked ranges are never guessed',()=>{
+ const text='持有期在30天（不含）至90天（含），退出费率0.5%。',t=matchTemplateRedemptionTier(text,atom(text,'0.5%'));assert.equal(t.condition,'calendar_day:(30,90]');
+ for(const phrase of ['持有期30天至90天','持有期30-90天','持有期超过30天或不足90天']){const x=phrase+'，退出费率0.5%。',candidate=matchTemplateRedemptionTier(x,atom(x,'0.5%'));assert.ok(candidate?.warning,phrase);}
+});
+
+test('same-unit month and year tiers match without conversion and have explicit unit identities',()=>{
+ for(const [unit,id]of [['个月','calendar_month'],['年','calendar_year']]){
+  const text=`持有期不足1${unit}，退出费率1%；持有满1${unit}但不足3${unit}，退出费率0.5%；持有期不少于3${unit}，退出费率0%。`,c=buildRedemptionTierIndex(contract([text]));
+  assert.deepEqual(tiers(text).map(t=>resolveRedemptionTier(c,t,{}).value),['1%','0.5%','0%']);assert.ok(tiers(text).every(t=>t.condition.startsWith(id+':')));assert.ok(tiers(text).every(t=>!t.warning));
+ }
+ const months='持有期不足12个月，退出费率1%；持有期不少于12个月，退出费率0%。',year='持有期不足1年，退出费率1%。';assert.equal(result([months],year,'1%').status,'pending');
+ const mixed='持有期不少于1年但不足18个月，退出费率0.5%。';assert.ok(matchTemplateRedemptionTier(mixed,atom(mixed,'0.5%')).warning);
+});
+
+test('month and year table headers supply the same unit to bare D conditions',()=>{
+ for(const [label,unit]of [['持有期限（个月）','个月'],['持有期限（年）','年']]){const rows=table([['D<1','1%'],['1≤D<3','0.5%'],['D≥3','0%']],[label,'退出费率']),text=`持有期不足1${unit}，退出费率1%；持有满1${unit}不足3${unit}，退出费率0.5%；持有期不少于3${unit}，退出费率0%。`,c=buildRedemptionTierIndex(contract(rows));assert.deepEqual(tiers(text).map(t=>resolveRedemptionTier(c,t,{}).value),['1%','0.5%','0%'],label);}
+});
+
+test('same rates do not justify silently merging or splitting different template interval boundaries',()=>{
+ const source='持有天数＜30自然日，退出费率1%；30自然日≤D＜90自然日，退出费率1%；D≥90自然日，退出费率0%。';
+ const merged='持有天数＜90自然日，退出费率0.5%。',split='持有天数＜7自然日，退出费率0.5%。';
+ assert.equal(result([source],merged,'0.5%').status,'pending');assert.equal(result([source],split,'0.5%').status,'pending');
+});
+
+test('repeating the holding carrier can form the other boundary but cannot hide an additional eligibility condition',()=>{
+ const source='30自然日≤D＜90自然日，退出费率0.5%。',middle='持有满30天且持有不足90天，退出费率0.7%。';
+ assert.equal(result([source],middle,'0.7%').value,'0.5%');
+ const qualified='持有满30天且持有本公司其他产品，退出费率0.5%。',template='持有期不少于30天，退出费率0.7%。';
+ assert.ok(matchTemplateRedemptionTier(qualified,atom(qualified,'0.5%')).warning);assert.equal(result([qualified],template,'0.7%').status,'pending');
 });

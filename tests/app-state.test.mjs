@@ -453,6 +453,14 @@ test('contract holding-day fee tiers share one card with an optional full-text s
  assert.equal(app.state.supplementPreview.updates.length,2);assert.ok(buttonIn(entry.form,'确认并应用补充'));
  await buttonIn(entry.form,'确认并应用补充').click();assert.equal(app.state.task.materials[0].fields.find(f=>f.label==='退出费率').after,original);
 });
+test('fee card accepts complete wording over a single-rate template and offers undo after confirmation',async()=>{
+ const full='持有天数＜180自然日，退出费率1%；持有天数≥180自然日，退出费率0%。';
+ const app=createApp({taskFactory:(c,t,o)=>sectionCaseTask(c,t,o,{label:'退出费率',value:'退出费率0.5%。',clauses:[]})});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ let entry=supplementEntry(app,'退出费率');entry.input.value=full;await entry.form.onsubmit({preventDefault(){}});
+ assert.ok(app.state.supplementPreview?.feeText);assert.ok(descendants(entry.feedback()).some(n=>n.textContent.includes('完整文字')));
+ await buttonIn(entry.form,'确认并应用补充').click();assert.equal(app.state.task.materials[0].fields.find(f=>f.label==='退出费率').after,full);
+ entry=supplementEntry(app,'退出费率');assert.ok(entry.input);await buttonIn(app.elements.get('facts-list'),'撤销整段修改').click();assert.equal(app.state.task.materials[0].fields.find(f=>f.label==='退出费率').after,'退出费率0.5%。');
+});
 test('no-match and apply errors remain visible beside the triggering card',async()=>{
  const app=await pendingApp(),entry=supplementEntry(app,'产品代码');entry.input.value='000123';
  const api=app.state.reviewApi;app.state.reviewApi={...api,previewSupplement:()=>({updates:[],warnings:['未定位到对应位置']})};
