@@ -279,8 +279,8 @@ test('narrative review cards combine display and confirmation while keeping each
  const task=app.state.task,range=task.facts.filter(f=>f.key==='investment_scope'&&!f.scope.share);assert.equal(range.length,2);
  const rangeCard=card('投资范围'),forms=descendants(rangeCard).filter(n=>n.tagName==='form');assert.equal(forms.length,2);
  for(const original of ['本计划投资债券、货币市场工具。','本计划可投资公募基金。'])assert.ok(descendants(rangeCard).some(n=>n.textContent===original));
- const firstForm=forms[0],input=firstForm.children.find(n=>n.tagName==='input');input.value='本计划主要投资债券。';
- firstForm.onsubmit({preventDefault(){}});await buttonIn(app.elements.get('supplement-preview'),'确认并应用补充').click();
+ const firstForm=forms[0],input=firstForm.children.find(n=>['input','textarea'].includes(n.tagName));input.value='本计划主要投资债券。';
+ firstForm.onsubmit({preventDefault(){}});await buttonIn(firstForm,'确认并应用补充').click();
  assert.equal(range[0].value,'本计划主要投资债券。');assert.equal(range[1].value,null);assert.equal(range[1].status,'pending');
  const material=task.materials[0];assert.ok(material.operations.some(o=>o.kind==='replace'&&o.paragraphId==='v1'));assert.ok(!material.operations.some(o=>o.kind==='replace'&&o.paragraphId==='v2'));
  await buttonIn(card('投资范围'),'确认无误').click();assert.equal(range[1].userConfirmed,true);assert.ok(!range[0].userConfirmed);
@@ -405,9 +405,66 @@ test('editing an individual field invalidates its previous preview',async()=>{
  const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();appendSupplementFacts(app);
  const input=descendants(app.elements.get('facts-list')).find(n=>n['aria-label']==='补充产品代码');
  const form=descendants(app.elements.get('facts-list')).find(n=>n.tagName==='form'&&n.children.includes(input));
- input.value='000123';await form.onsubmit({preventDefault(){}});const oldButton=buttonIn(app.elements.get('supplement-preview'),'确认并应用补充');
+ input.value='000123';await form.onsubmit({preventDefault(){}});const oldButton=buttonIn(form,'确认并应用补充');
  input.value='000999';await input.dispatch('input');await oldButton.click();
  assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null);assert.equal(app.elements.get('supplement-preview').hidden,true);
+});
+
+function supplementEntry(app,label){
+ const input=descendants(app.elements.get('facts-list')).find(n=>n['aria-label']==='补充'+label);
+ assert.ok(input,`Missing supplement input: ${label}`);
+ const form=descendants(app.elements.get('facts-list')).find(n=>n.tagName==='form'&&n.children.includes(input));
+ return {input,form,feedback:()=>descendants(form).find(n=>n.className==='supplement-preview card-supplement-feedback')};
+}
+async function pendingApp(){const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();appendSupplementFacts(app);return app;}
+test('card supplements show blank and invalid input feedback beside the input, preserving text',async()=>{
+ const app=await pendingApp(),entry=supplementEntry(app,'风险等级');
+ await entry.form.onsubmit({preventDefault(){}});
+ assert.ok(entry.feedback()&&!entry.feedback().hidden,'Blank input needs visible feedback on its card');
+ assert.ok(descendants(entry.feedback()).some(n=>/请填写/.test(n.textContent)));
+ entry.input.value='错误风险';await entry.form.onsubmit({preventDefault(){}});
+ assert.equal(entry.input.value,'错误风险');assert.ok(descendants(entry.feedback()).some(n=>/R1至R5/.test(n.textContent)));
+ assert.equal(app.state.supplementPreview,null);assert.equal(app.elements.get('error-panel').hidden,true);
+ assert.ok(!buttonIn(entry.feedback(),'确认并应用补充'));
+});
+test('card preview, cancel and apply stay on the selected card',async()=>{
+ const app=await pendingApp(),entry=supplementEntry(app,'产品代码');entry.input.value='000123';
+ await entry.form.onsubmit({preventDefault(){}});assert.ok(entry.feedback()&&!entry.feedback().hidden);
+ assert.ok(descendants(entry.feedback()).some(n=>n.textContent.includes('000123')));
+ assert.equal(app.elements.get('supplement-preview').hidden,true);
+ const old=buttonIn(entry.feedback(),'确认并应用补充');await buttonIn(entry.feedback(),'取消').click();await old.click();
+ assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null);
+ await entry.form.onsubmit({preventDefault(){}});await buttonIn(entry.feedback(),'确认并应用补充').click();
+ assert.equal(app.state.task.facts.find(f=>f.id==='code').value,'000123');
+});
+test('a successfully supplemented text card remains editable for a second correction',async()=>{
+ const app=createApp({taskFactory:(c,t,o)=>sectionCaseTask(c,t,o,{label:'风险等级',value:'R3（中风险）',clauses:[]})});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ let entry=supplementEntry(app,'风险等级');entry.input.value='R2';await entry.form.onsubmit({preventDefault(){}});await buttonIn(entry.form,'确认并应用补充').click();
+ entry=supplementEntry(app,'风险等级');entry.input.value='R1';await entry.form.onsubmit({preventDefault(){}});await buttonIn(entry.form,'确认并应用补充').click();
+ assert.equal(app.state.task.materials[0].fields.find(f=>f.label==='风险等级').after,'R1（低风险）');
+});
+test('no-match and apply errors remain visible beside the triggering card',async()=>{
+ const app=await pendingApp(),entry=supplementEntry(app,'产品代码');entry.input.value='000123';
+ const api=app.state.reviewApi;app.state.reviewApi={...api,previewSupplement:()=>({updates:[],warnings:['未定位到对应位置']})};
+ await entry.form.onsubmit({preventDefault(){}});assert.ok(entry.feedback()&&!entry.feedback().hidden);
+ assert.ok(descendants(entry.feedback()).some(n=>/没有可直接应用/.test(n.textContent)));assert.ok(entry.feedback().scrolledIntoView);
+ app.state.reviewApi={...api,applySupplement:()=>{throw new Error('本次补充已失效，请重新预览。');}};
+ await entry.form.onsubmit({preventDefault(){}});await buttonIn(entry.feedback(),'确认并应用补充').click();
+ assert.ok(descendants(entry.feedback()).some(n=>/重新预览/.test(n.textContent)));assert.equal(app.state.supplementPreview,null);
+ assert.ok(!buttonIn(entry.feedback(),'确认并应用补充'));
+});
+test('empty resubmit, another card and upper inputs invalidate previous card apply buttons',async()=>{
+ for(const action of ['empty','invalid','other-card','upper-input','switch-tab']){
+  const app=await pendingApp(),entry=supplementEntry(app,'产品代码');entry.input.value='000123';await entry.form.onsubmit({preventDefault(){}});
+  const old=buttonIn(entry.feedback(),'确认并应用补充');assert.ok(old);
+  if(action==='empty'||action==='invalid'){entry.input.value=action==='empty'?'':'?';await entry.form.onsubmit({preventDefault(){}});}
+  if(action==='other-card'){const other=supplementEntry(app,'风险等级');other.input.value='R2';await other.form.onsubmit({preventDefault(){}});}
+  if(action==='upper-input')await app.elements.get('supplement-date').dispatch('input');
+  if(action==='switch-tab')await app.elements.get('supplement-excel-tab').click();
+  await old.click();assert.equal(app.state.task.facts.find(f=>f.id==='code').value,null,action);
+  assert.ok(!buttonIn(entry.feedback(),'确认并应用补充'),action+' clears the obsolete button');
+  if(!['empty','invalid'].includes(action))assert.equal(entry.feedback().hidden,true,action);
+ }
 });
 
 const calendarFixture=()=>{const row={id:'row-2',productName:'示例稳健1号',productCode:'000123',source:{file:'日历.xlsx',sheet:'Sheet1',row:2}};return {readProductCalendar:async({name})=>({name,rows:[row],warnings:[]}),matchCalendarRows:()=>[row]};};
@@ -528,7 +585,7 @@ test('manual month survives analysis, user supplement, and export; later edits u
   assert.ok(supplement, 'Pending facts expose the actual supplement handler');
   supplement.children.find(element => element.tagName === 'input').value = 'R2';
   await supplement.onsubmit({preventDefault() {}});
-  await descendants(app.elements.get('supplement-preview')).find(element=>element.tagName==='button'&&element.textContent==='确认并应用补充').click();
+  await buttonIn(supplement,'确认并应用补充').click();
   assert.equal(app.state.task.month, '203204');
   assert.equal(app.state.task.facts[0].value, 'R2');
   await app.elements.get('generate-button').click();
