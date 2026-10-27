@@ -83,7 +83,7 @@ function runPiece(run,text,kind,{deleted=false}={}) {
 function replaceNodeWith(node,pieces){const parent=node.parentNode;for(const piece of pieces)parent.insertBefore(piece,node);parent.removeChild(node);}
 function revision(doc,type,id,timestamp){const node=create(doc,W,`w:${type}`);setW(node,'id',id);setW(node,'author',AUTHOR);setW(node,'date',timestamp);return node;}
 
-const sectionReplacement=op=>op.kind==='replace'&&['contract_section','user_fee_text','equal_fee_tiers'].includes(op.source);
+const sectionReplacement=op=>op.kind==='replace'&&['contract_section','user_fee_text','equal_fee_tiers','user_custom_section'].includes(op.source);
 function sectionContent(entry,kind){
   const {paragraph,op}=entry,ns=kind==='docx'?W:A;
   if(op.start!==0||op.before!==textOf(paragraph,kind))failAt(entry,'整段文字更新必须准确对应整段原文');
@@ -133,10 +133,34 @@ function sectionBreak(run,kind){
   if(kind==='docx'){const clone=run.cloneNode(true);for(const n of directElements(clone))if(!tag(n,W,'rPr'))clone.removeChild(n);clone.appendChild(create(doc,W,'w:br'));return clone;}
   const br=create(doc,A,'a:br'),properties=children(run,A,'rPr')[0];if(properties)br.appendChild(properties.cloneNode(true));return br;
 }
+function replaceCustomPptParagraphs(entry,content,lines,fallback){
+  const {paragraph,op}=entry,properties=children(paragraph,A,'pPr')[0],ending=children(paragraph,A,'endParaRPr')[0];
+  // A forced break stretches a justified line across the entire table cell.
+  // Only explicit custom replacements use new paragraphs; other sources keep
+  // their existing line and revision handling unchanged.
+  const output=[];
+  for(const [index,line]of op.after.split('\n').entries()){
+    const target=index?paragraph.cloneNode(false):paragraph;
+    if(index&&properties)target.appendChild(properties.cloneNode(true));
+    const runs=sectionStyledRuns(line,lines[Math.min(index,lines.length-1)],fallback,'pptx');
+    if(index){
+      for(const run of runs)target.appendChild(run);
+      if(ending)target.appendChild(ending.cloneNode(true));
+      paragraph.parentNode.insertBefore(target,output.at(-1).nextSibling);
+    }else{
+      for(const run of runs)target.insertBefore(run,content[0]);
+      for(const node of content)target.removeChild(node);
+    }
+    output.push(target);
+  }
+  entry.outputParagraphs=output;
+  return {replaced:true,section:true};
+}
 function replaceSection(entry,kind,nextId,timestamp){
   const {paragraph,op}=entry,content=sectionContent(entry,kind),lines=sectionStyleLines(paragraph,kind);
   const fallback=lines.flatMap(line=>line.spans)[0]?.run||content.find(n=>tag(n,kind==='docx'?W:A,'r'));
   if(!fallback)failAt(entry,'整段缺少可继承的文字样式');
+  if(kind==='pptx'&&op.source==='user_custom_section'&&op.after.includes('\n'))return replaceCustomPptParagraphs(entry,content,lines,fallback);
   const next=[];
   if(op.after)op.after.split('\n').forEach((line,index)=>{
     if(index)next.push(sectionBreak(next.filter(n=>tag(n,kind==='docx'?W:A,'r')).at(-1)||fallback,kind));
@@ -312,7 +336,9 @@ export async function writeMaterial(materialReview,{month,targetName,now=new Dat
     }
     let expected=group.source;
     for(const r of replacements)expected=expected.slice(0,r.start)+r.op.after+expected.slice(r.end);
-    if(textOf(group.paragraph,kind)!==expected)fail('输出文字与核对结果不一致，已停止生成。');
+    const outputParagraphs=replacements[0]?.outputParagraphs;
+    const actual=outputParagraphs?outputParagraphs.map(p=>textOf(p,kind)).join('\n'):textOf(group.paragraph,kind);
+    if(actual!==expected)fail('输出文字与核对结果不一致，已停止生成。');
     pkg.mark(group.entries[0].op.part);
   }
   if(kind==='docx'&&hasReplacements)await enableWordTracking(pkg);
