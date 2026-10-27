@@ -510,7 +510,7 @@ function renderRecord({m,field,p,atom,f,userRenderValue}){
  if(field.sectionOverrideId)return;
  const common={paragraphId:p.id,part:p.part,index:p.index,reason:f.reason,factIds:[f.id]};
  if(f.userConfirmed)return;
- if(atom.key==='opening_fixed_monthdays'&&f.status==='verified'){
+ if(atom.key==='opening_fixed_monthdays'&&f.status==='verified'&&userRenderValue===undefined){
   for(const change of atom.monthdayChanges||[])m.operations.push({...common,...change,id:operationId(m),kind:'replace'});
   return;
  }
@@ -630,16 +630,108 @@ export function analyzeMaterials(contract,templates,{now,month}={}){
  }
  return finalize(task);
 }
-function validateSupplement(fact,value,task){
+const wholeSupplementKey=key=>['opening','opening_fixed_monthdays','lockup','duration','warning_stop'].includes(key)||key.startsWith('investment_')||key.startsWith('custom:')&&key!=='custom:performance_parameter';
+const cleanSupplementText=value=>String(value??'').replace(/[\r\n\t]+/g,' ').replace(/ {2,}/g,' ').trim();
+function feeClause(text,start,length){
+ const left=text.slice(0,start),tail=text.slice(start+length),a=Math.max(...['；',';','。','\n'].map(s=>left.lastIndexOf(s)))+1,b=tail.search(/[；;。\n]/);
+ return text.slice(a,start)+'@'+(b<0?tail:tail.slice(0,b));
+}
+function feeCondition(clause){
+ let text=clause.normalize('NFKC').replace(/\s/g,'').replace(/(?:持有天数|持有时间|持有期限|持有期|持有|D)(?:为|是)?/gi,'持有');
+ text=text.replace(/不少于|不低于|大于等于|不小于|≥|>=/g,'≥').replace(/不超过|不高于|小于等于|≤|<=/g,'≤').replace(/小于|少于|不足|不满|未满/g,'<').replace(/大于|超过/g,'>').replace(/自然日|天|日/g,'天');
+ text=text.replace(/(\d+(?:\.\d+)?)(天|个月|月|年|万元|元)(?:及以上|以上)/g,'≥$1$2').replace(/(\d+(?:\.\d+)?)(天|个月|月|年|万元|元)(?:以下)/g,'<$1$2').replace(/持有满/g,'持有≥');
+ const conditions=[...text.matchAll(/[<>≥≤]\d+(?:\.\d+)?(?:天|个月|月|年|万元|元)?|\d+(?:\.\d+)?(?:天|个月|月|年|万元|元)?(?:至|到|[-~～])\d+(?:\.\d+)?(?:天|个月|月|年|万元|元)/g)].map(m=>m[0]);
+ if(!conditions.length)return '';
+ // Keep other qualifiers (for example early exit or a special class), while
+ // normalizing only controlled synonyms for the fee and holding period.
+ let rest=text;for(const condition of conditions)rest=rest.replace(condition,'');
+ for(const [,label]of FEE_LABELS)rest=rest.replace(new RegExp(label.source,'g'),'');
+ rest=rest.replace(/持有|费率|比例|收取|按|为|是|的|[(),，:：@。]/g,'');
+ return conditions.join('|')+'|'+rest;
+}
+function scalarFee(fact,value){
+ let raw=String(value).normalize('NFKC').trim(),label=FEE_LABELS.find(([key])=>key===fact.key)?.[1];
+ if(label&&new RegExp('^(?:不收取|不收|免收|免除)(?:'+label.source+')[。.]?$').test(raw))return '0%';
+ if(label)raw=raw.replace(new RegExp('^(?:'+label.source+')(?:率)?\\s*(?:为|是)?\\s*[:：]?\\s*'),'');
+ raw=raw.replace(/^(?:年费率|费率)\s*(?:为|是)?\s*[:：]?\s*/,'').replace(/\s*(?:\/年|每年|年化)[。.]?$/,'').replace(/[。.]$/,'').trim();
+ if(!/^\d+(?:\.\d+)?\s*%?$/.test(raw)||number(raw)>100)throw new Error('请填写0至100之间的费率数字，可附本项名称和“%/年”；分档费率请保留各档条件填写完整内容。');
+ return raw.replace(/[%\s]/g,'')+'%';
+}
+function feeNeedsConditions(task,fact){
+ const rs=task._records.filter(r=>r.f===fact),byParagraph=new Map(),conditions=new Set();
+ for(const r of rs){const key=r.m.materialId+'|'+r.p.id,list=byParagraph.get(key)||[];list.push(r);byParagraph.set(key,list);const c=feeCondition(feeClause(r.p.text,r.atom.start,r.atom.before.length));if(c)conditions.add(c);}
+ return conditions.size>1||[...byParagraph.values()].some(rs=>rs.length>1&&new Set(rs.map(r=>norm(r.atom.before))).size>1);
+}
+function occurrenceValue(r,value){return{materialId:r.m.materialId,fieldId:r.field.id,paragraphId:r.p.id,start:r.atom.start,before:r.atom.before,context:r.p.text,state:JSON.stringify([r.f.status,r.f.value,r.userRenderValue??null]),value};}
+function feeOccurrencePreview(task,fact,raw,groupId){
+ const rs=task._records.filter(r=>r.f===fact),tokens=feeTokens(raw,fact.key,/信托/.test(task.target.name)).filter(t=>t.key===fact.key);
+ if(!tokens.length)throw new Error('此项包含多个费率或分档条件，请按各档原条件填写完整费率，不能用一个数字覆盖所有档。');
+ const candidates=tokens.map(t=>({condition:feeCondition(feeClause(raw,t.start,t.before.length)),value:scalarFee(fact,t.value)}));
+ if(candidates.some(c=>!c.condition)||new Set(candidates.map(c=>c.condition)).size!==candidates.length)throw new Error('分档费率的条件不完整或重复，无法逐档对应；请保留各档持有期限等条件。');
+ const used=new Set(),occurrenceValues=rs.map(r=>{const condition=feeCondition(feeClause(r.p.text,r.atom.start,r.atom.before.length)),matches=candidates.filter(c=>c.condition===condition);if(matches.length!==1)throw new Error('补充内容与模板的分档条件无法一一对应，请保留原持有期限和适用条件后修改费率。');used.add(condition);return occurrenceValue(r,matches[0].value);});
+ if(used.size!==candidates.length)throw new Error('补充中有模板未包含的分档条件；请核对完整条件后再应用。');
+ return{groupId,text:raw,updates:[{factId:fact.id,key:fact.key,label:fact.label,value:raw,occurrenceValues}],warnings:[]};
+}
+function wholeOccurrencePreview(task,fact,raw,groupId){
+ validateSupplement(fact,raw,task);const rs=task._records.filter(r=>r.f===fact),fields=new Map();
+ for(const r of rs){const key=r.m.materialId+'|'+r.field.id;if(!fields.has(key))fields.set(key,[]);fields.get(key).push(r);}
+ const lines=String(raw).split(/\r?\n/).filter(s=>s.trim()),occurrenceValues=[];
+ for(const records of fields.values()){
+  if(records.length>1&&lines.length!==records.length)throw new Error('此项原文分为'+records.length+'段，请按原段落分成'+records.length+'行填写完整内容后预览。');
+  records.forEach((r,i)=>occurrenceValues.push(occurrenceValue(r,cleanSupplementText(records.length===1?raw:lines[i]))));
+ }
+ return{groupId,text:raw,updates:[{factId:fact.id,key:fact.key,label:fact.label,value:cleanSupplementText(raw),occurrenceValues}],warnings:[],notes:/[\r\n\t]/.test(raw)?['已将同一段内的换行或制表符转为空格，保留模板原有段落排版。']:[]};
+}
+function supplementChanges(task,preview){
+ const changes=new Map(),ids=new Set((preview.updates||[]).map(u=>u.factId));
+ const render=(text,replacements)=>{for(const r of [...replacements].sort((a,b)=>b.start-a.start))text=text.slice(0,r.start)+r.after+text.slice(r.start+r.before.length);return text;};
+ for(const update of preview.updates||[])for(const r of task._records.filter(r=>r.f.id===update.factId)){
+  const item=update.occurrenceValues?.find(x=>x.materialId===r.m.materialId&&x.fieldId===r.field.id&&x.paragraphId===r.p.id&&x.start===r.atom.start);
+  let value=item?.value??update.value;
+  if(r.atom.key==='risk_description')value=({R1:'低风险',R2:'中低风险',R3:'中风险',R4:'中高风险',R5:'高风险'})[value]||value;
+  const percentage=r.atom.before.match(/^(\d+(?:\.(\d+))?)(\s*[】\]]?\s*[%％])$/);if(/^\d+(?:\.\d+)?%$/.test(value)&&percentage)value=number(value).toFixed(Math.max(percentage[2]?.length||0,value.split('.')[1]?.replace('%','').length||0))+percentage[3];
+  const operations=r.m.operations.filter(o=>o.paragraphId===r.p.id&&o.kind==='replace'),key=r.m.materialId+'|'+r.p.id,itemChange=changes.get(key)||{label:r.field.label,original:r.p.text,before:render(r.p.text,operations),after:'',materialName:r.m.template.name,materialId:r.m.materialId,paragraphId:r.p.id,replacements:operations.filter(o=>!o.factIds?.some(id=>ids.has(id)))};
+  itemChange.replacements.push({start:r.atom.start,before:r.atom.before,after:String(value)});changes.set(key,itemChange);
+ }
+ for(const c of changes.values()){c.after=render(c.original,c.replacements);delete c.replacements;delete c.original;}
+ preview.changes=[...changes.values()];return preview;
+}
+function validateSupplement(fact,value,task,perOccurrence=false){
  if(fact.sectionOverrideId)throw new Error('此项已采用合同内容；请先撤销采用，再单独补充。');
  const raw=String(value??'').trim();if(!raw)throw new Error('请输入补充值。');let accepted=raw;
- if(fact.key.endsWith('_fee')||fact.key.startsWith('performance_')&&fact.key!=='performance_policy'||fact.key==='benchmark'){if(!/^\d+(?:\.\d+)?\s*[%％]?$/.test(raw)||number(raw)>100)throw new Error('请填写0至100之间的费率数字，可带百分号。');accepted=raw.replace(/[％\s]/g,'').replace(/%$/,'')+'%';}
- else if(/^(?:minimum_amount|additional_amount|opening_cycle|opening_days|opening_monthday|lockup_days|duration_years)$/.test(fact.key)){const m=raw.match(/^(\d+(?:\.\d+)?)\s*(?:万元?|年|天|个月|个交易日|交易日|日)?$/);if(!m)throw new Error('请填写有效数字，可附相应单位。');if(!/amount/.test(fact.key)&&!Number.isInteger(Number(m[1])))throw new Error('日期、天数及周期请填写整数。');accepted=m[1];if(fact.key==='opening_monthday'&&(Number(accepted)<1||Number(accepted)>31))throw new Error('每月日期应为1至31日。');}
+ if(fact.key.endsWith('_fee')){if(!perOccurrence&&feeNeedsConditions(task,fact))throw new Error('此项包含多个分档费率，请保留各档适用条件填写完整内容，不能填写一个数字更新所有档。');accepted=scalarFee(fact,raw);}
+ else if(fact.key.startsWith('performance_')&&fact.key!=='performance_policy'||fact.key==='benchmark'){if(!/^\d+(?:\.\d+)?\s*[%％]?$/.test(raw)||number(raw)>100)throw new Error('请填写0至100之间的费率数字，可带百分号。');accepted=raw.replace(/[％\s]/g,'').replace(/%$/,'')+'%';}
+ else if(/^(?:minimum_amount|additional_amount|opening_cycle|opening_days|opening_monthday|lockup_days|duration_years)$/.test(fact.key)){
+  if(['minimum_amount','additional_amount','lockup_days','duration_years'].includes(fact.key)){
+   const fields=new Map();for(const r of task._records.filter(r=>r.f===fact)){const key=r.m.materialId+'|'+r.field.id;fields.set(key,(fields.get(key)||0)+1);}if([...fields.values()].some(n=>n>1))throw new Error('本项原文包含多个不同条件的参数，不能用一个数字同时更新；请核对各处原文和适用条件。');
+  }
+  const types={minimum_amount:['首次认购|认购起点|最低认购|起购金额|参与起点|首次参与','万元?'],additional_amount:['追加认购|追加参与|追加金额','万元?'],opening_cycle:['开放周期|每满|每隔','个月|月'],opening_days:['开放天数|连续开放|开放期|开放','个交易日|交易日'],opening_monthday:['每月开放日|每月','日|号'],lockup_days:['持有期|锁定期|封闭期','自然日|天|日'],duration_years:['存续期限|存续期|产品期限','年']},[labels,units]=types[fact.key];
+  const input=raw.normalize('NFKC').replace(new RegExp('^(?:'+labels+')\\s*(?:为|是)?\\s*[:：]?\\s*'),'').replace(/[。.]$/,'').trim(),m=input.match(new RegExp('^(\\d+(?:\\.\\d+)?)\\s*(?:'+units+')?$'));
+  if(!m)throw new Error('请填写有效数字及本项相应单位，不能混用天、月、年或金额单位。');if(!/amount/.test(fact.key)&&!Number.isInteger(Number(m[1])))throw new Error('日期、天数及周期请填写整数。');accepted=m[1];if(fact.key==='opening_monthday'&&(Number(accepted)<1||Number(accepted)>31))throw new Error('每月日期应为1至31日。');
+ }
  else if(fact.key==='opening_weekday'){if(!/^(?:周|星期|每周)?[一二三四五六日天]$/.test(raw))throw new Error('请填写星期几，例如周四。');accepted=raw.at(-1);}
  else if(fact.key==='opening_monthly_weekday'){accepted=parseMonthlyWeekdayInput(raw);for(const r of task._records.filter(r=>r.f===fact)){const alignment=monthlyWeekdayChanges(r.atom.monthlyPattern,accepted);if(alignment.warning)throw new Error(alignment.warning);}}
- else if(fact.key==='product_code'&&!/^[A-Za-z0-9][A-Za-z0-9_.-]{4,24}$/.test(raw))throw new Error('请填写5至25位产品代码，仅含字母、数字或代码连接符。');
- else if(fact.key==='risk_rating'){const map={'低风险':'R1','中低风险':'R2','中风险':'R3','中高风险':'R4','高风险':'R5'};accepted=map[raw]||raw.toUpperCase();if(!/^R[1-5]$/.test(accepted))throw new Error('请填写R1至R5或相应风险等级名称。');}
+ else if(fact.key==='product_code'){accepted=raw.normalize('NFKC').replace(/^(?:产品代码|产品编码)\s*(?:为|是)?\s*[:：]?\s*/,'').trim();if(!/^[A-Za-z0-9][A-Za-z0-9_.-]{4,24}$/.test(accepted))throw new Error('请填写5至25位产品代码，仅含字母、数字或代码连接符。');}
+ else if(['risk_rating','risk_description'].includes(fact.key)){
+  const map={'低风险':'R1','中低风险':'R2','中风险':'R3','中高风险':'R4','高风险':'R5'},text=raw.normalize('NFKC').toUpperCase().replace(/^(?:风险等级|风险评级|产品评级)\s*(?:为|是)?\s*[:：]?\s*/,'').replace(/[。.]$/,'').trim(),codes=unique(text.match(/R\d/g)||[]),words=unique(text.match(/中低风险|中高风险|中风险|低风险|高风险/g)||[]);
+  const values=unique([...codes,...words.map(w=>map[w])]),rest=text.replace(/R[1-5]|中低风险|中高风险|中风险|低风险|高风险|[()\s]/g,'');if(values.length!==1||!/^R[1-5]$/.test(values[0])||rest)throw new Error('请填写R1至R5或相应风险等级名称，代码与中文风险等级须一致。');accepted=values[0];
+ }
  else if(fact.key==='opening_announced_date')accepted=parseDateInput(raw,Number(task.month.slice(0,4))).value;
+ else if(wholeSupplementKey(fact.key)){
+  const records=task._records.filter(r=>r.f===fact),local=records.some(r=>r.atom.start!==0||r.atom.before!==r.p.text);
+  if(local){
+   if(records.some(r=>!/^\d+(?:\.\d+)?$/.test(r.atom.before)))throw new Error('此项仅定位到局部内容，无法将完整表述直接写入，请核对原文位置。');
+   const scalar=raw.normalize('NFKC').trim();
+   if(/^\d+(?:\.\d+)?$/.test(scalar))accepted=scalar;
+   else{
+    const numbers=[...scalar.matchAll(/\d+(?:\.\d+)?/g)],skeleton=numbers.length===1?norm(scalar.replace(numbers[0][0],'#')):'';
+    if(numbers.length!==1||records.some(r=>norm(r.p.text.slice(0,r.atom.start)+'#'+r.p.text.slice(r.atom.start+r.atom.before.length))!==skeleton))throw new Error('此项已定位为局部数字；请只填写该数字，或保留原话术及条件、仅调整这个数字后再预览。');
+    accepted=numbers[0][0];
+   }
+  }else{
+   if(/^\d+(?:\.\d+)?\s*(?:%|％|天|日|个月|月|年)?$/.test(raw)&&records.some(r=>/[\u4e00-\u9fff]/.test(r.atom.before)))throw new Error('此项按完整原文补充，请填写完整表述，不能用单个数字替换整段。');accepted=cleanSupplementText(raw);
+  }
+ }
  return accepted;
 }
 function rebuildFacts(task,ids){
@@ -853,16 +945,21 @@ function previewDates(task,group,facts,raw){
 export function previewSupplement(task,groupId,text){
  const group=getSupplementGroups(task).find(g=>g.id===groupId);if(!group)throw new Error('该补充事项已变化，请重新核对。');
  const facts=task.facts.filter(f=>group.factIds.includes(f.id)),raw=String(text).trim();let values={};
- if(group.kind==='performance'){
+ if(facts.length===1&&facts[0].key.endsWith('_fee')&&feeNeedsConditions(task,facts[0]))return supplementChanges(task,feeOccurrencePreview(task,facts[0],raw,groupId));
+ if(facts.length===1&&facts[0].key==='opening_fixed_monthdays')return supplementChanges(task,wholeOccurrencePreview(task,facts[0],raw,groupId));
+ if(facts.length===1&&wholeSupplementKey(facts[0].key))values[facts[0].key]=raw;
+ else if(group.kind==='performance'){
   values=parsePerformanceInput(raw);const expected=unique(facts.filter(f=>/^performance_R\d/.test(f.key)).map(f=>f.key)),given=Object.keys(values).filter(k=>/^performance_R\d/.test(k));
   if(expected.length>1&&given.length>0&&given.length<expected.length&&!/R[1-9]\s*(?:为|是|=|[:：])/.test(raw))throw new Error('模板有多个业绩报酬基准，请填写完整分段，或用R1、R2和第1档、第2档明确要补充的档位。');
  }
  else if(group.kind==='date')return previewDates(task,group,facts,raw);
- else if(group.kind==='benchmark'){if(/[-−－]\s*\d/.test(raw))throw new Error('当前补充百分比应为0至100，不能填写负数。');const m=raw.match(/\d+(?:\.\d+)?\s*[%％]?/);if(!m)throw new Error('请填写业绩比较基准，例如2.25%。');values.benchmark=m[0];}
+ else if(group.kind==='benchmark'){const input=raw.normalize('NFKC');if(/[-−－]\s*\d/.test(input))throw new Error('当前补充百分比应为0至100，不能填写负数。');const m=input.match(/^(?:(?:业绩比较基准|业绩参考基准|业绩基准)\s*(?:为|是)?\s*[:：]?\s*)?(\d+(?:\.\d+)?\s*%?)(?:\s*(?:业绩比较基准|业绩参考基准|业绩基准))?[。.]?$/);if(!m)throw new Error('请填写单个业绩比较基准，例如2.25%，不能填入范围或多个百分比。');values.benchmark=m[1];}
  else if(group.kind==='opening'){values=parseOpeningInput(raw);if(!Object.keys(values).length&&unique(facts.map(f=>f.key)).length===1)values[facts[0].key]=raw;}
  else values[facts[0].key]=raw;
  if(!Object.keys(values).length)throw new Error('请明确填写开放规则，例如每满18个月、连续开放5个交易日。');
- return previewUpdates(task,facts,values,raw,groupId);
+ const preview=previewUpdates(task,facts,values,raw,groupId);
+ if(wholeSupplementKey(facts[0]?.key||'')&&/[\r\n\t]/.test(raw))preview.notes=['已将同一段内的换行或制表符转为空格，保留模板原有段落排版。'];
+ return group.kind==='text'||wholeSupplementKey(facts[0]?.key||'')?supplementChanges(task,preview):preview;
 }
 // Supplemental input rows are independent: never bulk-parse untouched rows.
 export function previewSupplementField(task,kind,text){
@@ -930,9 +1027,18 @@ export function applySupplementBatch(task,previews){
  const prepared=new Map();
  for(const preview of previews)for(const update of preview.updates||[]){
   const f=task.facts.find(f=>f.id===update.factId);if(!f||update.key&&update.key!==f.key)throw new Error('补充对应的事项已经变化，请重新解析。');
-  const value=validateSupplement(f,update.value,task),renders=[];
+  let value;const renders=[],records=task._records.filter(r=>r.f===f);
+  if(update.occurrenceValues){
+   if(!(f.key.endsWith('_fee')||f.key==='opening_fixed_monthdays')||!Array.isArray(update.occurrenceValues)||update.occurrenceValues.length!==records.length)throw new Error('补充原文定位不完整，请重新预览。');
+   const remaining=new Set(update.occurrenceValues);
+   for(const r of records){const matches=[...remaining].filter(x=>x.materialId===r.m.materialId&&x.fieldId===r.field.id&&x.paragraphId===r.p.id&&x.start===r.atom.start&&x.before===r.atom.before&&x.context===r.p.text&&x.state===JSON.stringify([f.status,f.value,r.userRenderValue??null]));if(matches.length!==1)throw new Error('补充对应的原文或核对结果已经变化，请重新预览。');const item=matches[0];remaining.delete(item);renders.push([r,validateSupplement(f,item.value,task,true)]);}
+   value=f.key.endsWith('_fee')&&unique(renders.map(([,v])=>v)).length===1?renders[0][1]:cleanSupplementText(preview.text||update.value);
+  }else{
+   value=validateSupplement(f,update.value,task);
+   for(const r of records)renders.push([r,f.key==='opening_announced_date'?formatDateLike(value,r.atom.before,r.atom.dateRole,Number(task.month.slice(0,4))):value]);
+  }
   if(prepared.has(f.id)&&prepared.get(f.id).value!==value)throw new Error('同一事项有不同补充值，请核对后再应用。');
-  if(f.key==='opening_announced_date')for(const r of task._records.filter(r=>r.f===f))renders.push([r,formatDateLike(value,r.atom.before,r.atom.dateRole,Number(task.month.slice(0,4)))]);
+  if(prepared.has(f.id)&&JSON.stringify(prepared.get(f.id).renders.map(([,v])=>v))!==JSON.stringify(renders.map(([,v])=>v)))throw new Error('同一事项有不同补充值，请核对后再应用。');
   prepared.set(f.id,{f,value,renders,text:preview.text||String(update.value),source:preview.source,basis:update.basis});
  }
  if(!prepared.size)throw new Error('没有可对应到模板的补充字段。');
