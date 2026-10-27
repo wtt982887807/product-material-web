@@ -8,8 +8,9 @@ import {monthlyWeekdayPatterns,parseMonthlyWeekdayInput,monthlyWeekdayChanges} f
 import {resolveMonthlyDateRule} from './opening-rules.js?v=20261026-opening-strategy';
 export {getOpeningRuleReview} from './opening-rules.js?v=20261026-opening-strategy';
 import {getTradingDays} from './trading-calendar.js?v=20261026-openings';
-import {buildRedemptionTierIndex,matchTemplateRedemptionTier,resolveRedemptionTier} from './redemption-tiers.js?v=20261027-fee-text';
-import {previewFeeText,applyFeeText,refreshFeeTextOperations,releaseFeeText} from './fee-text-supplement.js?v=20261027-fee-text';
+import {buildRedemptionTierIndex,matchTemplateRedemptionTier,resolveRedemptionTier} from './redemption-tiers.js?v=20261027-equal-fees';
+import {previewFeeText,applyFeeText,refreshFeeTextOperations,releaseFeeText,assertFeeActionScope} from './fee-text-supplement.js?v=20261027-equal-fees';
+import {simplifyEqualFeeTiers} from './equal-fee-tiers.js?v=20261027-equal-fees';
 const PRODUCT_END='(?:集合资金信托计划|集合资产信托计划|集合资产管理计划|单一资产管理计划|资产管理计划|证券投资基金|信托计划)';
 const NAME_LABEL=/^(?:产品名称|产品全称|信托名称|信托计划名称|基金名称|计划名称|资产管理计划名称|产品简称)$/;
 const MARKETING=/历史业绩|产品表现|累计增长|最新净值|成立以来|年化收益|产品举例|同策略|代表产品|获奖|金牛奖/;
@@ -78,31 +79,48 @@ function monthlyOpeningContext(text,pattern){
  const previous=text.slice(0,start).trim().split(/[。；;\n]/).at(-1)||'';
  return /^(?:\d+[.、]\s*)?(?:开放日|开放期|开放安排|参与和退出|参与|申购|赎回|退出)(?:安排|日期)?\s*[:：]?\s*$/.test(previous);
 }
-const FEE_LABELS=[['trust_total_fee',/固定信托管理费|固定管理费/],['trust_manager_fee',/受托人信托报酬|(?:收取)?信托管理费|受托人报酬/],['floating_advisor_fee',/浮动投资顾问费/],['floating_sales_fee',/浮动销售服务费/],['advisor_fee',/固定投资顾问费|投资顾问费/],['sales_fee',/固定销售服务费|销售服务费/],['custody_fee',/托管费(?:率)?|保管费(?:率)?/],['management_fee',/管理费(?:率)?/],['redemption_fee',/赎回费(?:率)?|退出费(?:率)?/],['subscription_fee',/认[、/／]?申购(?:费|费用)|认购(?:费|费用)|申购(?:费|费用)|参与费(?:率)?/]];
+const FEE_LABELS=[['trust_total_fee',/固定信托管理费|固定管理费/],['trust_manager_fee',/受托人信托报酬|(?:收取)?信托管理费|受托人报酬/],['floating_advisor_fee',/浮动投资顾问费/],['floating_sales_fee',/浮动销售服务费/],['advisor_fee',/固定投资顾问费|投资顾问费/],['sales_fee',/固定销售服务费|销售服务费/],['custody_fee',/托管费(?:率)?|保管费(?:率)?/],['management_fee',/管理费(?:率)?/],['redemption_fee',/赎回费(?:率)?|退出费(?:率)?/],['subscription_fee',/(?:认[、/／]?申购|认购|申购|参与)(?:(?:费(?:用|率)?)?\s*[/／、及和与]\s*(?:认购|申购|参与))*费(?:用|率)?/]];
+const ACTION_FEE_LABEL=/(?:认[、/／]?申购|认购|申购|参与|赎回|退出)(?:(?:费(?:用|率)?)?\s*[/／、及和与]\s*(?:认购|申购|参与|赎回|退出))*费(?:用|率)?/g;
+function feeActionSet(label){
+ const source=String(label).replace(/认[、/／]?申购/g,'认购/申购'),actions=[...source.matchAll(/认购|申购|参与|赎回|退出/g)].map(m=>m[0]==='申购'?'参与':m[0]==='赎回'?'退出':m[0]);
+ return ['认购','参与','退出'].filter(a=>actions.includes(a)).join('|');
+}
+function feeActionKey(actions,fallback=''){
+ const list=actions.split('|');return list.includes('退出')?(list.length>1?'subscription_redemption_fee':'redemption_fee'):actions?'subscription_fee':fallback;
+}
 const AGGREGATE_LAYERS=/(?:两层|双层|上下两层).{0,8}(?:合计|总计|总费|综合)|(?:合计|总计).{0,5}(?:两层|双层)/;
-function feeTokens(text,baseKey,trust){
+function feeTokens(text,baseKey,trust,baseActions=''){
  const tokens=[];for(const m of text.matchAll(PERCENT)){
   const before=text.slice(Math.max(0,m.index-100),m.index);const hits=[];
   for(const [key,re] of FEE_LABELS)for(const a of before.matchAll(new RegExp(re.source,'g')))hits.push({key,index:a.index,length:a[0].length});
+  for(const a of before.matchAll(ACTION_FEE_LABEL)){const feeActions=feeActionSet(a[0]);hits.push({key:feeActionKey(feeActions),index:a.index,length:a[0].length,feeActions});}
   // A longer semantic label owns its nested generic label (信托管理费 contains 管理费).
   const specific=hits.filter(h=>!hits.some(other=>other!==h&&other.index<=h.index&&other.index+other.length>=h.index+h.length&&other.length>h.length));
-  specific.sort((a,b)=>b.index-a.index||b.length-a.length);let key=specific[0]?.key||baseKey;
+  specific.sort((a,b)=>b.index-a.index||b.length-a.length||Number(!!b.feeActions)-Number(!!a.feeActions));let key=specific[0]?.key||baseKey;
+  const feeActions=specific[0]?.feeActions||(!specific.length?baseActions:'');
   if(key==='trust_total_fee'&&!trust)key='management_fee';
   if(trust&&key==='management_fee')key='trust_manager_fee';
-  if(baseKey==='subscription_redemption_fee'||/(?:参与|认.{0,5}购)[/／、及和].{0,4}(?:退出|赎回)(?:费率|费)[：:\s]*$/.test(before))key='subscription_redemption_fee';
-  const raw=m[0];tokens.push({key,start:m.index,before:raw,value:`${number(raw)}%`});
+  const raw=m[0];tokens.push({key,start:m.index,before:raw,value:`${number(raw)}%`,...(feeActions?{feeActions}:{})});
  }return tokens;
 }
 function resolveFee(key,rs,scope,trust){
+ if(['subscription_fee','redemption_fee','subscription_redemption_fee'].includes(key)){
+  const required=(scope.feeActions||(key==='redemption_fee'?'退出':key==='subscription_redemption_fee'?'参与|退出':'')).split('|').filter(Boolean);
+  if(required.length){
+   const results=required.map(action=>{const candidates=[];for(const b of filtered(rs,scope)){
+    for(const t of feeTokens(b.text,'',trust))if(t.feeActions?.split('|').includes(action))candidates.push({value:t.value,evidence:[quote(b.base||b,b.text)]});
+    for(const a of b.text.matchAll(ACTION_FEE_LABEL))if(feeActionSet(a[0]).split('|').includes(action)&&/(?:不收取|不收|免收|免除)\s*$/.test(b.text.slice(Math.max(0,a.index-12),a.index)))candidates.push({value:'0%',evidence:[quote(b.base||b,b.text)]});
+   }return pick(candidates);});
+   if(results.length===1)return results[0];
+   return results.every(r=>r.status==='verified'&&equivalent(r.value,results[0].value))?{...results[0],evidence:results.flatMap(r=>r.evidence)}:{status:'pending',value:null,evidence:results.flatMap(r=>r.evidence),reasonType:'needs_review',reason:required.join('、')+'费率需分别取得同口径依据，且数值一致，才能共用一个费率。'};
+  }
+ }
  const candidates=[];for(const b of filtered(rs,scope)){
   // Fee context is explicitly anchored locally; percentages from investment restrictions do not qualify.
   const tokens=feeTokens(b.text,'',trust);
   for(const t of tokens)if(t.key===key&&t.value!=='NaN%')candidates.push({value:t.value,evidence:[quote(b.base||b,b.text)]});
   const aliases=key==='subscription_fee'?/(?:不收取|不收|免收).{0,8}(?:认购|申购|参与)(?:[、/／](?:认购|申购|参与))?(?:费|费用)/:key==='redemption_fee'?/(?:不收取|不收|免收).{0,8}(?:赎回|退出)(?:费|费用)/:null;
   if(aliases?.test(b.text))candidates.push({value:'0%',evidence:[quote(b.base||b,b.text)]});
- }
- if(key==='subscription_redemption_fee'){
-  const a=resolveFee('subscription_fee',rs,scope,trust),b=resolveFee('redemption_fee',rs,scope,trust);return a.status==='verified'&&b.status==='verified'&&equivalent(a.value,b.value)?{...a,evidence:[...a.evidence,...b.evidence]}:{status:'pending',value:null,evidence:[...a.evidence,...b.evidence],reason:'参与及退出两个费率需分别核实。'};
  }
  return pick(candidates);
 }
@@ -422,7 +440,7 @@ function atomsFor(label,text,target,fieldText=text){
   for(const m of text.matchAll(/中低风险|中高风险|中风险|低风险|高风险/g))add('risk_description',m,m[0],m[0],{scope:scopeFor(label,text,m.index)});
   return atoms.length?atoms:[{key,start:0,before:text,value:text}];
  }
- if(['fees','management_fee','custody_fee','subscription_fee','redemption_fee'].includes(key)){const labeled=FEE_LABELS.find(([,re])=>new RegExp('^(?:'+re.source+')$').test(labelNorm(label)))?.[0];const feeKey=/(?:参与|认.{0,5}购)[/／、及和].{0,4}(?:退出|赎回)/.test(label)?'subscription_redemption_fee':labeled||key;return feeTokens(text,feeKey,trust).map(t=>({...t,scope:scopeFor(label,text,t.start)}));}
+ if(['fees','management_fee','custody_fee','subscription_fee','redemption_fee'].includes(key)){const labeled=FEE_LABELS.find(([,re])=>new RegExp('^(?:'+re.source+')$').test(labelNorm(label)))?.[0],actions=feeActionSet(label),feeKey=feeActionKey(actions,labeled||key);return feeTokens(text,feeKey,trust,actions).map(t=>({...t,scope:{...scopeFor(label,text,t.start),...(t.feeActions&&t.key!=='redemption_fee'?{feeActions:t.feeActions}:{})}}));}
  if(key==='performance'){
   const matches=performanceTokens(text),all=performanceTokens(fieldText),thresholds=unique(all.filter(t=>t.role==='threshold').map(t=>number(t.value))).sort((a,b)=>a-b);
   const ratios=unique(all.filter(t=>t.role==='ratio').map(t=>number(t.value))).sort((a,b)=>a-b);
@@ -496,7 +514,7 @@ function addOccurrence(task,m,field,p,atom,resolution){
  if(atom.key==='opening_announced_date'){scope.period='announcement';scope.condition=[atom.dateEvent,atom.dateRole,norm(atom.before),atom.dateWindow||''].join('|');}
  if(atom.key.startsWith('investment_')||atom.key.startsWith('custom:')||['opening','lockup','duration'].includes(atom.key))scope.condition=norm(atom.before);
  const factKey=(atom.key==='risk_description'?'risk_rating':atom.key)+'|'+JSON.stringify(scope);
- const factLabel=atom.redemptionTier?'退出费率（'+atom.redemptionTier.label+'）':atom.key==='performance_policy'?'业绩报酬':atom.key.startsWith('performance_ratio_')?'业绩报酬提成比例（第'+atom.key.match(/\d+$/)[0]+'档）':/^performance_R\d/.test(atom.key)?'业绩报酬基准 R'+atom.key.match(/\d+$/)[0]:field.label;
+ const factLabel=atom.redemptionTier?'退出费率（'+atom.redemptionTier.label+'）':scope.feeActions?scope.feeActions.replaceAll('|','/')+'费率':atom.key==='redemption_fee'&&keyFor(field.label)!=='redemption_fee'?'退出费率':atom.key==='performance_policy'?'业绩报酬':atom.key.startsWith('performance_ratio_')?'业绩报酬提成比例（第'+atom.key.match(/\d+$/)[0]+'档）':/^performance_R\d/.test(atom.key)?'业绩报酬基准 R'+atom.key.match(/\d+$/)[0]:field.label;
  let f=task._factMap.get(factKey);if(!f){f={id:'fact-'+(task.facts.length+1),key:atom.key,label:factLabel,value:resolution.value,status:resolution.status,evidence:resolution.evidence||[],scope,occurrences:[],reason:resolution.reason,reasonType:resolution.reasonType||(resolution.status==='verified'?'confirmed':'needs_review')};task.facts.push(f);task._factMap.set(factKey,f);}
  else if((atom.key==='opening_monthly_weekday'||atom.redemptionTier)&&resolution.status!=='verified'&&f.status==='verified'){
   Object.assign(f,{value:null,status:resolution.status,reason:resolution.reason,reasonType:'needs_review'});
@@ -590,11 +608,27 @@ function reviewParagraph(task,m,field,p,rs){
  }
 }
 function finalize(task){
+ // Rebuild only previously compacted fields so later supplements and undo use fresh facts.
+ for(const m of task.materials)for(const field of m.fields.filter(f=>f.equalFeeCompacted)){
+  delete field.equalFeeCompacted;const ids=new Set(field.paragraphIds);
+  m.operations=m.operations.filter(o=>!ids.has(o.paragraphId));
+  for(const r of task._records.filter(r=>r.m===m&&r.field===field))renderRecord(r);
+ }
  refreshSectionOperations(task);
  refreshFeeTextOperations(task);
  for(const m of task.materials){
   m.operations=m.operations.filter((o,i,arr)=>!arr.slice(0,i).some(a=>a.paragraphId===o.paragraphId&&a.kind===o.kind&&a.start===o.start&&a.before===o.before&&a.after===o.after));
   for(const field of m.fields){field.factIds=unique(field.factIds);const fs=field.factIds.map(id=>task.facts.find(f=>f.id===id));field.status=fs.some(f=>f.status==='conflict')?'conflict':fs.some(f=>f.status==='pending')?'pending':'verified';const replaces=m.operations.filter(o=>field.paragraphIds.includes(o.paragraphId)&&o.kind==='replace');field.after=field.paragraphIds.map(id=>{let t=m.template.paragraphs.find(p=>p.id===id)?.text||'';for(const o of replaces.filter(o=>o.paragraphId===id).sort((a,b)=>b.start-a.start))t=t.slice(0,o.start)+o.after+t.slice(o.start+o.before.length);return t;}).join('\n');if(field.source!=='company')field.reason=field.status==='verified'?(replaces.length?'合同有明确依据，最小范围更新。':'原值与已取得依据一致。'):'保留模板原值，关键参数标黄并添加批注。';}
+  for(const field of m.fields){
+   const fs=field.factIds.map(id=>task.facts.find(f=>f.id===id));
+   if(field.status!=='verified'||!fs.length||fs.some(f=>!['subscription_fee','redemption_fee','subscription_redemption_fee'].includes(f.key)||f.userConfirmed)||field.sectionOverrideId||field.feeTextOverrideId)continue;
+   const after=simplifyEqualFeeTiers(field.after);if(after===field.after)continue;
+   const ids=new Set(field.paragraphIds);if(m.fields.some(f=>f!==field&&f.paragraphIds.some(id=>ids.has(id))))continue;
+   const ps=field.paragraphIds.map(id=>m.template.paragraphs.find(p=>p.id===id)).filter(p=>p?.text?.trim());if(!ps.length)continue;
+   m.operations=m.operations.filter(o=>!ids.has(o.paragraphId));
+   for(const [i,p]of ps.entries())if(p.text!==(i===0?after:''))m.operations.push({id:operationId(m),kind:'replace',source:'equal_fee_tiers',paragraphId:p.id,part:p.part,index:p.index,start:0,before:p.text,after:i===0?after:'',factIds:field.factIds,reason:'各档费率相同且金额或持有期限覆盖完整，合并为统一费率。'});
+   field.after=after;field.equalFeeCompacted=true;field.reason='各档费率相同，合并为统一费率；原合同依据保留。';
+  }
  }
  task.stats={facts:task.facts.length,verified:task.facts.filter(f=>f.status==='verified').length,pending:task.facts.filter(f=>f.status!=='verified').length,contractMissing:task.facts.filter(f=>f.status!=='verified'&&f.reasonType==='contract_missing').length,needsReview:task.facts.filter(f=>f.status!=='verified'&&f.reasonType!=='contract_missing').length,changes:task.materials.reduce((n,m)=>n+m.operations.filter(o=>o.kind==='replace').length,0),materials:task.materials.length};return task;
 }
@@ -656,6 +690,7 @@ function feeCondition(clause){
  return conditions.join('|')+'|'+rest;
 }
 function scalarFee(fact,value){
+ assertFeeActionScope(value,fact.scope);
  let raw=String(value).normalize('NFKC').trim(),label=FEE_LABELS.find(([key])=>key===fact.key)?.[1];
  if(label&&new RegExp('^(?:不收取|不收|免收|免除)(?:'+label.source+')[。.]?$').test(raw))return '0%';
  if(label)raw=raw.replace(new RegExp('^(?:'+label.source+')(?:率)?\\s*(?:为|是)?\\s*[:：]?\\s*'),'');
@@ -717,6 +752,19 @@ function supplementChanges(task,preview){
   itemChange.replacements.push({start:r.atom.start,before:r.atom.before,after:String(value)});changes.set(key,itemChange);
  }
  for(const c of changes.values()){c.after=render(c.original,c.replacements);delete c.replacements;delete c.original;}
+ // A compacted field owns one whole-paragraph operation. Rebuild all its fees
+ // for preview, including untouched facts, then apply the same simplification.
+ for(const m of task.materials)for(const field of m.fields.filter(f=>f.equalFeeCompacted&&f.factIds.some(id=>ids.has(id)))){
+  const scratch={operations:[]};
+  for(const r of task._records.filter(r=>r.m===m&&r.field===field)){
+   const u=preview.updates.find(u=>u.factId===r.f.id);
+   const item=u?.occurrenceValues?.find(x=>x.materialId===m.materialId&&x.fieldId===field.id&&x.paragraphId===r.p.id&&x.start===r.atom.start);
+   renderRecord({...r,m:scratch,...(u?{f:{...r.f,value:u.value,status:'verified',userConfirmed:false},userRenderValue:item?.value??u.value}:{})});
+  }
+  const after=field.paragraphIds.map(id=>render(m.template.paragraphs.find(p=>p.id===id)?.text||'',scratch.operations.filter(o=>o.paragraphId===id&&o.kind==='replace'))).join('\n');
+  for(const id of field.paragraphIds)changes.delete(m.materialId+'|'+id);
+  changes.set(m.materialId+'|'+field.id,{label:field.label,before:field.after,after:simplifyEqualFeeTiers(after),materialName:m.template.name,materialId:m.materialId});
+ }
  preview.changes=[...changes.values()];return preview;
 }
 function validateSupplement(fact,value,task,perOccurrence=false){
