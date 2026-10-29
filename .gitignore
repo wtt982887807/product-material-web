@@ -10,6 +10,7 @@ web-private/
 *.pptx
 *.pdf
 *.xlsx
+!assets/manager-introductions.xlsx
 *.zip
 .env*
 __pycache__/
