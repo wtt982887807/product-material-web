@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="根据合同更新产品要素，保留模板原话术与格式。在浏览器本地读取并导出 Word 和 PowerPoint。">
-  <title>产品要素工作台</title><link rel="stylesheet" href="styles.css?v=20261027-custom-investment">
+  <title>产品要素工作台</title><link rel="stylesheet" href="styles.css?v=20261029-company-versions">
 </head>
 <body>
   <header class="topbar"><a class="brand" href="./" aria-label="产品要素工作台首页"><span class="brand-mark">P</span><span>产品要素工作台<small>PRODUCT MATERIALS</small></span></a><div class="top-meta"><span class="local-dot"></span>文件在本机处理<a href="https://github.com/wtt982887807/product-material-web" target="_blank" rel="noopener">使用说明 ↗</a></div></header>
@@ -16,7 +16,7 @@
         <div class="upload-card contract-card" id="contract-drop"><div class="file-icon">合同</div><h3>目标产品合同 <span class="required">必选</span></h3><p>DOCX / DOC · 仅选一份</p><label class="file-button" for="contract-input">选择合同</label><input id="contract-input" type="file" accept=".docx,.doc"><div class="file-list" id="contract-files" aria-live="polite"></div></div>
         <div class="upload-card" id="templates-drop"><div class="file-icon light">模板</div><h3>要更新的物料 <span class="required">至少一份</span></h3><p>PPT、一页通或海报 · DOCX / DOC / RTF / PPTX</p><label class="file-button secondary" for="templates-input">选择模板，可多选</label><input id="templates-input" type="file" accept=".docx,.doc,.rtf,.pptx" multiple><div class="file-list" id="template-files" aria-live="polite"></div></div>
       </div>
-      <section class="company-upload" id="company-drop" aria-labelledby="company-heading"><div><h3 id="company-heading">一页通公司介绍 <span class="required">可选 · 仅用于 Word</span></h3><p>已内置 2026.10 修正版，规模日期为2026年6月末，无需重复上传。上传新版后，本浏览器会自动沿用新版。</p><p id="company-status" class="company-status" aria-live="polite">正在准备公司介绍…</p></div><div class="company-actions"><label class="file-button secondary" for="company-input">上传最新公司介绍</label><input id="company-input" type="file" accept=".docx"><button class="text-button" id="company-clear" type="button" hidden>恢复网页内置版本</button></div></section>
+      <section class="company-upload" id="company-drop" aria-labelledby="company-heading"><div><h3 id="company-heading">一页通公司介绍 <span class="required">可选 · 仅用于 Word</span></h3><p>已内置 2026.10 通用版和建行版，默认使用通用版。上传新版仅更新当前选中的版本，本浏览器会分别保存。</p><p id="company-status" class="company-status" aria-live="polite">正在准备公司介绍…</p></div><div class="company-actions"><div class="company-version-control"><label for="company-variant">版本切换</label><select id="company-variant" aria-label="公司介绍版本切换"><option value="general">通用版</option><option value="ccb">建行版</option></select></div><a id="company-download" class="text-button" hidden download>下载当前模板</a><label class="file-button secondary" for="company-input">上传最新公司介绍</label><input id="company-input" type="file" accept=".docx"><button class="text-button" id="company-clear" type="button" hidden>恢复网页内置版本</button></div></section>
       <p class="preparation-note">Word 模板会先自动接受旧修订；旧版 DOC / RTF 自动转换成 DOCX，再进行本轮审阅修改。</p>
       <div class="scope-note"><strong>更新范围</strong><span>产品要素＋一页通匹配到的公司介绍。海报和PPT不更新公司介绍；历史业绩及人员介绍保持原样。</span></div>
       <div class="action-row"><p id="selection-hint">选好文件后，开始核对。</p><button class="primary-button" id="analyze-button" disabled>开始核对 <span>→</span></button></div>
@@ -52,6 +52,6 @@
     <section class="how-it-works"><div><span>01</span><strong>同一事实，统一核对</strong><p>保留各模板自己的句式与位置。</p></div><div><span>02</span><strong>缺项保留，局部标黄</strong><p>不把旧值删成整段“待补充”。</p></div><div><span>03</span><strong>产品更新，月份自动</strong><p>制作月份只用于文件命名。</p></div></section>
   </main>
   <footer><span>产品要素工作台 · 本地文件处理</span><span>合同和模板在本机处理；网页自带公司介绍，可上传新版覆盖。</span></footer>
-  <script src="vendor/jszip.min.js"></script><script src="vendor/docToText.js"></script><script type="module" src="src/bootstrap.js?v=20261027-custom-investment"></script>
+  <script src="vendor/jszip.min.js"></script><script src="vendor/docToText.js"></script><script type="module" src="src/bootstrap.js?v=20261029-company-versions"></script>
 </body>
 </html>

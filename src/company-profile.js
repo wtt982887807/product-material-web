@@ -97,9 +97,25 @@ function plainSection(s,i){
  return{id:`section-${i+1}`,layout:s.layout,heading:s.heading,subject:s.subject,aliases:s.aliases,columns:s.columns.map(c=>({role:c.role,subject:c.subject,entries:c.entries})),notes:s.notes.map(p=>({paragraphId:p.id,part:p.part,index:p.index,text:p.text,entries:noteAtoms(p)})),sourceTexts:s.paragraphs.concat(s.notes.filter(p=>!s.paragraphs.includes(p))).map(p=>({paragraphId:p.id,text:p.text}))};
 }
 
-export async function parseCompanyProfile(file){
+function selectedVersion(t,variant){
+ if(variant===undefined)return t;
+ const labels={general:'通用版本',ccb:'建行版本'};
+ if(!['general','ccb'].includes(variant))throw new Error('公司介绍版本无效，请选择通用版本或建行版本。');
+ const versionNames=new Map([['通用版本','general'],['通用版','general'],['建行版本','ccb'],['建行版','ccb']]),versionOf=text=>versionNames.get(compact(text));
+ // A version marker is a standalone body heading, not a label inside a
+ // company table. Keep original offsets so all evidence still points to source.
+ const markers=t.paragraphs.filter(p=>p.part==='word/document.xml'&&!p.tableId&&versionOf(p.text));
+ if(!markers.length)return t;
+ const ranges=markers.flatMap((p,i)=>versionOf(p.text)===variant?[{start:p.index,end:markers[i+1]?.index??Infinity}]:[]);
+ if(!ranges.length)throw new Error('公司介绍文件中未找到'+labels[variant]+'，请上传包含该版本的文件。');
+ const body=t.paragraphs.filter(p=>p.part==='word/document.xml'&&ranges.some(r=>p.index>=r.start&&p.index<r.end)),ids=new Set(body.flatMap(references)),bodyIds=new Set(body.map(p=>p.id));
+ const paragraphs=t.paragraphs.filter(p=>bodyIds.has(p.id)||(p.part!=='word/document.xml'&&ids.has(noteIdentity(p))));
+ return{...t,paragraphs};
+}
+
+export async function parseCompanyProfile(file,{variant}={}){
  if(!/\.docx$/i.test(file?.name||''))throw new Error('公司介绍请使用 DOCX 文件。');
- const t=await readTemplate(file),found=sections(t).filter(s=>s.columns.length&&s.subject);
+ const t=selectedVersion(await readTemplate(file),variant),found=sections(t).filter(s=>s.columns.length&&s.subject);
  if(!found.length)throw new Error('未识别到公司介绍双栏或三项指标版式，请检查公司介绍文件。');
  const date=String(file.name).match(/(20\d{2})[.年_-]?(0?[1-9]|1[0-2])(?=[^\d]|$)/);
  return{schemaVersion:1,name:t.name,version:date?`${date[1]}.${date[2].padStart(2,'0')}`:'未标注月份',sha256:t.sha256,sections:found.map((s,i)=>plainSection({...s,notes:s.notes.filter(p=>companyNote(t,s,p))},i)),warnings:[...t.warnings],sourceTexts:t.paragraphs.filter(p=>p.text.trim()).map(p=>({paragraphId:p.id,part:p.part,index:p.index,text:p.text}))};

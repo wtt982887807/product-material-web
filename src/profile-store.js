@@ -127,28 +127,32 @@ async function transaction(indexedDB, mode, action, operation, onResult = value 
   }
 }
 
-/** One validated company document, stored only in this browser's IndexedDB. */
-export function createProfileStore({indexedDB = globalThis.indexedDB} = {}) {
+/** One validated document per version, stored only in this browser's IndexedDB. */
+export function createProfileStore({indexedDB = globalThis.indexedDB, variant = 'general'} = {}) {
+  // Keep the existing key for general uploads so earlier browser data remains
+  // available without a database upgrade; CCB uploads have their own slot.
+  const key = variant === 'general' ? KEY : variant === 'ccb' ? 'latest-ccb' : null;
+  if (!key) throw failure('PROFILE_VARIANT_INVALID', '公司介绍版本无效，请选择通用版本或建行版本。');
   return {
     async load() {
-      const record = await transaction(indexedDB, 'readonly', '读取', store => store.get(KEY));
+      const record = await transaction(indexedDB, 'readonly', '读取', store => store.get(key));
       return record === undefined ? null : copyRecord(record, true);
     },
     async save(record) {
       // Snapshot before opening the database; callers may reuse their buffers.
       const copy = copyRecord(record);
       // A single put atomically replaces the old record. Do not clear first.
-      await transaction(indexedDB, 'readwrite', '保存', store => store.put(copy, KEY));
+      await transaction(indexedDB, 'readwrite', '保存', store => store.put(copy, key));
     },
     async clear() {
-      await transaction(indexedDB, 'readwrite', '清除', store => store.clear());
+      await transaction(indexedDB, 'readwrite', '清除', store => store.delete(key));
     },
     async clearIfSha256(expected) {
       // Read and conditional deletion share a single write transaction. A newer
       // upload in another tab can never be deleted based on an earlier read.
-      return transaction(indexedDB,'readwrite','清除',store=>store.get(KEY),(record,store)=>{
+      return transaction(indexedDB,'readwrite','清除',store=>store.get(key),(record,store)=>{
         if(!record || record.sha256!==expected)return false;
-        store.delete(KEY);return true;
+        store.delete(key);return true;
       });
     },
   };

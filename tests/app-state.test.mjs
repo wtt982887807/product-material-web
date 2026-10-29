@@ -56,7 +56,7 @@ const record = value => ({...value, bytes: new Uint8Array([1])});
 // Execute the real app event handlers with small DOM/import boundary fakes.
 // No browser, storage, Office files or network is used; naming and supplements
 // retain their production implementations.
-function createApp({store, parseCompanyProfile, onAnalyze, onWrite, onDownload, readWordTemplate, readWordContract, taskFactory, calendar} = {}) {
+function createApp({store, storeFactory, parseCompanyProfile, prepareCompanyTemplate, onAnalyze, onWrite, onDownload, readWordTemplate, readWordContract, taskFactory, calendar} = {}) {
   const elements = new Map(ids.map(id => [id, new Element()]));
   const document = {
     getElementById(id) { assert.ok(elements.has(id), `Missing page element: ${id}`); return elements.get(id); },
@@ -65,8 +65,9 @@ function createApp({store, parseCompanyProfile, onAnalyze, onWrite, onDownload, 
   };
   const saved = store || {load: async () => null, save: async () => {}, clear: async () => {}};
   const modules = {
-    './default-company-profile.js': {loadDefaultCompanyProfile: () => profile('builtin-company.docx', 'c'), isSupersededCompanyProfile: companyDefaults.isSupersededCompanyProfile},
-    './profile-store.js': {createProfileStore: () => saved},
+    './default-company-profile.js': {loadDefaultCompanyProfile: variant => profile(variant==='ccb'?'builtin-ccb.docx':'builtin-company.docx', 'c'), getDefaultCompanyTemplate:variant=>({name:variant==='ccb'?'builtin-ccb.docx':'builtin-company.docx',url:'https://example.test/'+(variant||'general')+'.docx'}),isSupersededCompanyProfile: companyDefaults.isSupersededCompanyProfile},
+    './profile-store.js': {createProfileStore: options => storeFactory?storeFactory(options):saved},
+    './company-template.js': {prepareCompanyTemplate:prepareCompanyTemplate|| (async file=>file)},
     './company-profile.js': {
       parseCompanyProfile: parseCompanyProfile || (async ({name}) => profile(name)),
       applyCompanyProfile(task, current) { task.companyProfile = {name: current.name}; return task; },
@@ -714,6 +715,42 @@ test('a fresh browser starts with the built-in company reference without uploadi
   assert.equal(app.state.task.companyProfile.name, 'builtin-company.docx');
 });
 
+test('company version starts general, switches both evidence and download, and a fresh page defaults to general',async()=>{
+ const app=createApp();await app.ready;
+ assert.equal(app.elements.get('company-variant')?.value,'general');
+ assert.equal(app.elements.get('company-download').href,'https://example.test/general.docx');
+ app.elements.get('company-variant').value='ccb';await app.elements.get('company-variant').dispatch('change');
+ assert.equal(app.state.company.name,'builtin-ccb.docx');assert.equal(app.elements.get('company-download').download,'builtin-ccb.docx');
+ assert.equal(app.elements.get('company-download').href,'https://example.test/ccb.docx');assert.match(app.elements.get('company-status').textContent,/建行版/);
+ await chooseMaterials(app);await app.elements.get('analyze-button').click();assert.equal(app.state.task.companyProfile.name,'builtin-ccb.docx');
+ const fresh=createApp();await fresh.ready;assert.equal(fresh.state.companyVariant,'general');
+});
+
+test('company uploads, download bytes and clear stay isolated between variants',async()=>{
+ const records=new Map(),calls=[],storeFactory=({variant})=>({load:async()=>records.get(variant)||null,save:async r=>{calls.push(variant);records.set(variant,r);},clear:async()=>records.delete(variant)});
+ const app=createApp({storeFactory});await app.ready;
+ await app.elements.get('company-input').dispatch('change',{target:{files:[file('generic-upload.docx',7)]}});
+ assert.equal(app.elements.get('company-download').download,'generic-upload.docx');
+ assert.deepEqual(new Uint8Array(await app.blobs.get(app.elements.get('company-download').href).arrayBuffer()),new Uint8Array([7]));
+ app.elements.get('company-variant').value='ccb';await app.elements.get('company-variant').dispatch('change');
+ await app.elements.get('company-input').dispatch('change',{target:{files:[file('ccb-upload.docx',8)]}});
+ assert.deepEqual(calls,['general','ccb']);assert.equal(records.size,2);
+ await app.elements.get('company-clear').click();assert.equal(records.has('general'),true);assert.equal(records.has('ccb'),false);assert.equal(app.state.company.name,'builtin-ccb.docx');
+ app.elements.get('company-variant').value='general';await app.elements.get('company-variant').dispatch('change');
+ assert.equal(app.state.company.name,'generic-upload.docx');assert.equal(app.elements.get('company-download').download,'generic-upload.docx');
+});
+
+test('unsaved company uploads survive switching within the page and busy switches cannot change evidence',async()=>{
+ const app=createApp({store:{load:async()=>null,save:async()=>{throw Error('空间不足');},clear:async()=>{}}});await app.ready;
+ await app.elements.get('company-input').dispatch('change',{target:{files:[file('session-only.docx',9)]}});
+ app.state.busy=true;app.elements.get('company-variant').value='ccb';await app.elements.get('company-variant').dispatch('change');
+ assert.equal(app.state.companyVariant,'general');assert.equal(app.elements.get('company-variant').value,'general');app.state.busy=false;
+ app.elements.get('company-variant').value='ccb';await app.elements.get('company-variant').dispatch('change');
+ app.elements.get('company-variant').value='general';await app.elements.get('company-variant').dispatch('change');
+ assert.equal(app.state.company.name,'session-only.docx');assert.equal(app.state.companyPersisted,false);assert.match(app.elements.get('company-status').textContent,/未能保存/);
+ assert.deepEqual(new Uint8Array(await app.blobs.get(app.elements.get('company-download').href).arrayBuffer()),new Uint8Array([9]));
+});
+
 test('an uploaded company reference overrides the built-in version and clearing returns to it', async () => {
   const saved = profile('uploaded-company.docx');
   let cleared = false;
@@ -725,6 +762,33 @@ test('an uploaded company reference overrides the built-in version and clearing 
   assert.equal(cleared, true);
   assert.equal(app.state.company.name, 'builtin-company.docx');
   assert.match(app.elements.get('company-status').textContent, /网页内置/);
+});
+
+test('restoring version caches passes the selected variant and rejects an invalid replacement without losing its download',async()=>{
+ const calls=[],saved={general:record(profile('saved-general.docx')),ccb:record(profile('saved-ccb.docx','b'))};
+ const app=createApp({storeFactory:({variant})=>({load:async()=>saved[variant],save:async()=>{},clear:async()=>{}}),parseCompanyProfile:async(file,options)=>{calls.push(options.variant);if(file.name==='invalid.docx')throw Error('无法识别公司介绍');return saved[options.variant];}});
+ await app.ready;assert.equal(app.elements.get('company-download').download,'saved-general.docx');
+ app.elements.get('company-variant').value='ccb';await app.elements.get('company-variant').dispatch('change');
+ const oldLink=app.elements.get('company-download').href;
+ await app.elements.get('company-input').dispatch('change',{target:{files:[file('invalid.docx')]}});
+ assert.deepEqual(calls,['general','ccb','ccb']);assert.equal(app.state.company.name,'saved-ccb.docx');assert.equal(app.elements.get('company-download').href,oldLink);assert.match(app.elements.get('error-message').textContent,/仍保留此前版本/);
+});
+
+test('switching company version invalidates the prior generated task while retaining inputs and production month',async()=>{
+ const app=createApp();await app.ready;await chooseMaterials(app);
+ app.elements.get('month-value').value='2027-03';await app.elements.get('month-value').dispatch('change');
+ await app.elements.get('analyze-button').click();await app.elements.get('generate-button').click();assert.ok(app.state.urls.length);
+ const contract=app.state.contract,templates=app.state.templates;
+ app.elements.get('company-variant').value='ccb';await app.elements.get('company-variant').dispatch('change');
+ assert.equal(app.state.task,null);assert.equal(app.state.urls.length,0);assert.equal(app.state.contract,contract);assert.equal(app.state.templates,templates);assert.equal(app.state.month,'202703');
+ await app.elements.get('analyze-button').click();assert.equal(app.state.task.companyProfile.name,'builtin-ccb.docx');assert.match(app.elements.get('review-subtitle').textContent,/公司介绍（建行版）/);
+});
+
+test('a legacy mixed-version cache is verified before splitting, and download uses the selected bytes',async()=>{
+ const old=record(profile('mixed.docx')),calls=[];
+ const app=createApp({store:{load:async()=>old,save:async()=>{},clear:async()=>{}},parseCompanyProfile:async file=>{calls.push(file.name);return profile(file.name,file.name==='mixed.docx'?'a':'b');},prepareCompanyTemplate:async(file,{variant})=>{assert.equal(variant,'general');return{name:'selected-general.docx',bytes:new Uint8Array([7])};}});
+ await app.ready;assert.deepEqual(calls,['mixed.docx','selected-general.docx']);assert.equal(app.state.company.name,'selected-general.docx');
+ assert.deepEqual(new Uint8Array(await app.blobs.get(app.elements.get('company-download').href).arrayBuffer()),new Uint8Array([7]));
 });
 
 test('unavailable browser storage still leaves the built-in reference usable', async () => {

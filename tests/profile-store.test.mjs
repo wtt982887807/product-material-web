@@ -126,6 +126,58 @@ test('only the most recent saved document is returned and clear removes it persi
   assert.equal(await createStore({indexedDB}).load(), null);
 });
 
+test('general retains the legacy document while ccb starts independently and restores its own upload', async () => {
+  const indexedDB = fakeIndexedDB(), original = record('legacy-general.docx');
+  await createStore({indexedDB}).save(original);
+  const general = createStore({indexedDB, variant: 'general'}), ccb = createStore({indexedDB, variant: 'ccb'});
+  assert.deepEqual(await general.load(), original);
+  assert.equal(await ccb.load(), null);
+  const bank = {...record('ccb-company.docx', '建行口径公司'), sha256: 'b'.repeat(64)};
+  await ccb.save(bank);
+  assert.deepEqual(await createStore({indexedDB, variant: 'ccb'}).load(), bank);
+  assert.deepEqual(await createStore({indexedDB}).load(), original);
+});
+
+test('clearing either version leaves the other saved company template intact', async () => {
+  for (const selected of ['general', 'ccb']) {
+    const indexedDB = fakeIndexedDB();
+    const stores = Object.fromEntries(['general', 'ccb'].map(variant => [variant, createStore({indexedDB, variant})]));
+    await stores.general.save(record('general.docx'));
+    await stores.ccb.save(record('ccb.docx'));
+    await stores[selected].clear();
+    assert.equal(await createStore({indexedDB, variant: selected}).load(), null);
+    const other = selected === 'general' ? 'ccb' : 'general';
+    assert.deepEqual(await createStore({indexedDB, variant: other}).load(), record(other + '.docx'));
+  }
+});
+
+test('conditional removal is scoped even when both versions have the same document hash', async () => {
+  const indexedDB = fakeIndexedDB(), general = createStore({indexedDB}), ccb = createStore({indexedDB, variant: 'ccb'});
+  await general.save(record('general.docx'));
+  await ccb.save(record('ccb.docx'));
+  assert.equal(await ccb.clearIfSha256('b'.repeat(64)), false);
+  assert.equal(await ccb.clearIfSha256(record().sha256), true);
+  assert.equal(await ccb.load(), null);
+  assert.deepEqual(await general.load(), record('general.docx'));
+});
+
+test('a failed ccb replacement retains both committed versions', async () => {
+  const indexedDB = fakeIndexedDB(), general = createStore({indexedDB}), ccb = createStore({indexedDB, variant: 'ccb'});
+  await general.save(record('general.docx'));
+  await ccb.save(record('ccb.docx'));
+  indexedDB.control.failCommit = true;
+  await assert.rejects(ccb.save(record('new-ccb.docx')), /保存|存储|空间/);
+  assert.deepEqual(await general.load(), record('general.docx'));
+  assert.deepEqual(await ccb.load(), record('ccb.docx'));
+});
+
+test('unknown version names are rejected before accessing storage', () => {
+  const indexedDB = {open() { throw new Error('storage must not be opened'); }};
+  for (const variant of ['', 'CCB', 'latest', 'unknown', 'toString', '__proto__', null, 1]) {
+    assert.throws(() => createStore({indexedDB, variant}), /公司介绍.*版本/);
+  }
+});
+
 test('conditional migration removes only the expected source and retains a newer saved document',async()=>{
  const store=createStore({indexedDB:fakeIndexedDB()});
  assert.equal(typeof store.clearIfSha256,'function');
