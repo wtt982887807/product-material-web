@@ -16,3 +16,5 @@
 .manager-biography{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8}.manager-review blockquote{max-height:none;overflow:visible}.manager-upload:focus-within{outline:1px solid #b9cddd;outline-offset:6px}.month-card input[type=date]{font:inherit;font-size:20px;color:var(--deep);background:#fff;border:1px solid #b9cddd;border-radius:5px;padding:10px;width:100%;min-width:0}.month-card{min-width:270px}.month-card small{max-width:275px;line-height:1.6}
 
 .date-control{position:relative}.date-control .date-label{position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:20px;line-height:1.3;color:var(--deep);pointer-events:none;background:#fff}.date-control:not(:focus-within) input{color:transparent}.date-control:focus-within .date-label{display:none}
+
+.intro-mode-option{display:flex;align-items:center;gap:10px;margin:0 0 24px;padding:13px 16px;border:1px solid var(--line,#d7e3ee);border-radius:8px;background:#f6faff;color:#164b75;cursor:pointer}.intro-mode-option input{width:18px;height:18px;margin:0;accent-color:#0065ad;flex:0 0 auto}.intro-mode-option:has(input:checked){background:#eaf5ff;border-color:#78abd2}

@@ -126,3 +126,19 @@ export function uniqueDeliveryNames(names) {
     used.add(key(result));return result;
   });
 }
+
+/** Mode-aware display names; introduction-only never infers a shared product. */
+export function materialDeliveryName(material,{targetName,month=currentMonth()}={}){
+ if(material.updateMode==='introductions'){
+  if(!/^20\d{2}(?:0[1-9]|1[0-2])$/.test(month))throw new Error('制作月份应为有效的YYYYMM');
+  const match=String(material.template?.name||'').match(/^(.*)(\.(?:docx|pptx))$/i);
+  if(!match)throw new Error('只支持DOCX或PPTX输出');
+  let stem=match[1];
+  if(material.kind==='ppt')stem=stem.replace(/(?:产品要素及介绍|公司及经理介绍|产品要素)+$/,'');
+  stem=updateMonth(stem,month);
+  return stem+(material.kind==='ppt'?'公司及经理介绍':'')+match[2].toLowerCase();
+ }
+ const name=deliveryName(material.template.name,{targetName,templateProductName:material.templateProductName,kind:material.kind,month});
+ const hasProfiles=['company','manager'].some(key=>material.profilePages?.[key]?.length);
+ return material.kind==='ppt'&&hasProfiles?name.replace(/产品要素\.pptx$/,'产品要素及介绍.pptx'):name;
+}

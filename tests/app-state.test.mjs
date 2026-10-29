@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import JSZip from 'jszip';
 import * as naming from '../src/naming.js';
 import * as productionDates from '../src/production-date.js';
+import * as introductionTasks from '../src/introduction-task.js';
 import * as reviewEngine from '../src/review-engine.js';
 import * as companyDefaults from '../src/default-company-profile.js';
 import {calendarSupplementText,calendarOpeningRange} from '../src/calendar-import.js';
@@ -66,6 +67,9 @@ function createApp({store, storeFactory, parseCompanyProfile, prepareCompanyTemp
   };
   const saved = store || {load: async () => null, save: async () => {}, clear: async () => {}};
   const modules = {
+    './introduction-task.js':introductionTasks,
+    './ppt-company-profile.js':{applyPptCompanyProfile:task=>task},
+    './ppt-manager-profile.js':{applyPptManagerProfile:task=>task},
     './default-manager-profile.js': {DEFAULT_MANAGER_PROFILE:{schemaVersion:1,name:'内置经理.xlsx',sha256:'d'.repeat(64),records:[]},DEFAULT_MANAGER_TEMPLATE:{name:'内置经理.xlsx',url:'assets/manager-introductions.xlsx'}},
     './manager-store.js': {createManagerStore:()=>managerStore||{load:async()=>null,save:async()=>{},clear:async()=>{}}},
     './manager-data.js': {parseManagerProfile:parseManagerProfile|| (async({name})=>({schemaVersion:1,name,sha256:'e'.repeat(64),records:[]}))},
@@ -134,6 +138,45 @@ function appendSupplementFacts(app){
  app.renderReview();
 }
 const buttonIn=(element,text)=>descendants(element).find(n=>n.tagName==='button'&&n.textContent===text);
+
+test('introduction-only is off by default and full mode still requires a contract',async()=>{
+ const app=createApp();await app.ready;
+ assert.equal(app.elements.get('introductions-only').checked,false);
+ await app.elements.get('templates-input').dispatch('change',{target:{files:[file('甲产品.docx',2)]}});
+ assert.equal(app.elements.get('analyze-button').disabled,true);
+ const toggle=app.elements.get('introductions-only');toggle.checked=true;await toggle.dispatch('change');
+ assert.equal(app.elements.get('analyze-button').disabled,false);assert.equal(app.elements.get('contract-drop').hidden,true);
+ toggle.checked=false;await toggle.dispatch('change');assert.equal(app.elements.get('analyze-button').disabled,true);assert.equal(app.elements.get('contract-drop').hidden,false);
+});
+
+test('introduction-only bypasses even a previously selected contract and prepares direct downloads for multiple managers',async()=>{
+ let readContracts=0,analyses=0,writes=0,downloads=0;
+ const app=createApp({readWordContract:async()=>{readContracts++;throw new Error('must not read');},onAnalyze:()=>analyses++,onWrite:task=>{writes++;assert.equal(task.updateMode,'introductions');assert.equal(task.facts.length,2);},onDownload:()=>downloads++,onApplyManager(task){
+  if(task.updateMode!=='introductions')return;
+  task.facts=[];for(const m of task.materials){m.fields=[];for(const name of ['甲经理','乙经理']){const id=m.materialId+name;task.facts.push({id,key:'manager:'+name,label:'投资经理 · '+name,source:'manager',status:'verified',value:name+'完整简介',evidence:[],scope:{manager:name},occurrences:[{materialId:m.materialId,paragraphId:id,fieldId:id}]});m.fields.push({id,label:name,source:'manager',status:'verified',factIds:[id],paragraphIds:[id],before:'旧简介',after:name+'完整简介'});}}
+ }});await app.ready;await chooseMaterials(app);
+ const toggle=app.elements.get('introductions-only');toggle.checked=true;await toggle.dispatch('change');
+ await app.elements.get('analyze-button').click();
+ assert.equal(readContracts,0);assert.equal(analyses,0);assert.equal(writes,1);assert.equal(downloads,0,'prepared links should not silently start a download');
+ assert.ok(app.elements.get('download-list').children.some(n=>n.tagName==='a'));
+ assert.equal(app.elements.get('supplement-panel').hidden,true);assert.equal(app.state.filter,'all');
+ assert.equal(app.state.task.target.name,'公司和经理介绍更新');
+ app.elements.get('month-value').value='2027-01-30';await app.elements.get('month-value').dispatch('change');
+ assert.equal(writes,2,'a date change refreshes introduction files');assert.equal(downloads,0);
+ assert.equal(app.state.task.productionDate,'2027-01-30');assert.equal(app.state.task.month,'202701');
+ assert.equal(readContracts,0);assert.equal(analyses,0);assert.equal(app.state.task.facts.length,2);
+ assert.match(app.elements.get('generation-status').textContent,/直接点击/);
+ toggle.checked=false;await toggle.dispatch('change');assert.equal(app.state.task,null);assert.equal(app.elements.get('download-list').children.length,0);
+});
+
+test('same manager source is shown once across Word and PPT while different biographies remain separate',async()=>{
+ const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ const make=(id,scope,value='完整简介')=>({id,key:'manager:张三',label:'投资经理 · 张三',source:'manager',status:'verified',scope:{manager:'张三',recordId:'row-2',...scope},value,evidence:[{blockId:'manager-profile-hash-row-2'}],occurrences:[]});
+ app.state.task.facts.push(make('manager-word',{}),make('manager-ppt',{page:2,pages:[2]}),make('manager-different',{page:3,pages:[3]},'另一份完整简介'));
+ app.state.filter='all';app.renderReview();
+ const cards=app.elements.get('facts-list').children.filter(n=>n.className.includes('manager-review'));
+ assert.equal(cards.length,2);assert.ok(descendants(cards[0]).some(n=>n.textContent==='完整简介'));assert.ok(descendants(cards[1]).some(n=>n.textContent==='另一份完整简介'));
+});
 
 test('manager Excel can be uploaded, downloaded and restored independently of company templates',async()=>{
  const saved=[];const app=createApp({managerStore:{load:async()=>null,save:async r=>saved.push(r),clear:async()=>{}}});await app.ready;
