@@ -2,16 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DOMParser,XMLSerializer} from '@xmldom/xmldom';
 import JSZip from 'jszip';
-import {applyCompanyProfile} from '../src/company-profile.js';
+import {readFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {applyCompanyProfile,parseCompanyProfile} from '../src/company-profile.js';
 import {readTemplate} from '../src/office-reader.js';
 
 const module = await import('../src/default-company-profile.js').catch(error => {
   if(error.code === 'ERR_MODULE_NOT_FOUND') return {};
   throw error;
 });
-const load = () => {
+const load = (variant='general') => {
   assert.equal(typeof module.loadDefaultCompanyProfile,'function','built-in company profile loader is implemented');
-  return module.loadDefaultCompanyProfile();
+  return module.loadDefaultCompanyProfile(variant);
 };
 globalThis.DOMParser=DOMParser;
 globalThis.XMLSerializer=XMLSerializer;
@@ -33,8 +35,8 @@ async function document(body){
 test('built-in profile includes both complete company layouts with the corrected June 2026 scale date',()=>{
   const profile=load();
   assert.equal(profile.version,'2026.10');
-  assert.equal(profile.name,'公司介绍2026.10版本.docx');
-  assert.equal(profile.sha256,'42326e08f15f083c5bd0fe71b8e1363f3a962a80de63ab5b0fef929b7a6fcd56');
+  assert.equal(profile.name,'公司介绍2026.10（通用版）.docx');
+  assert.match(profile.sha256,/^[a-f\d]{64}$/);
   assert.deepEqual(profile.sections.map(section=>section.layout),['narrative','kpi']);
   const [narrative,kpi]=profile.sections;
   assert.deepEqual(narrative.columns.find(column=>column.role==='company').entries.map(entry=>[entry.key,entry.text]),[
@@ -42,7 +44,7 @@ test('built-in profile includes both complete company layouts with the corrected
     ['institution','全能型资产管理机构'],['experience','20多年资产管理经验'],
     ['team','专业的投研团队'],['product_system','全面的产品体系'],
     ['awards','荣获71座业内权威奖项“金牛奖”'],
-    ['aum','截至2026年6月末，公司资产管理规模超8800亿元*'],
+    ['aum','截至2026年6月末，公司资产管理规模超8800亿元'],
   ]);
   assert.deepEqual(narrative.columns.find(column=>column.role==='shareholder').entries.map(entry=>entry.text),[
     '国泰海通证券股份有限公司由国泰君安与海通证券合并而成，是中国资本市场长期、持续、全面领先的综合金融服务商。',
@@ -61,6 +63,40 @@ test('built-in profile includes both complete company layouts with the corrected
       assert.equal(source.text.slice(entry.start,entry.start+entry.text.length),entry.text);
     }
   }
+});
+
+test('generic is the default while CCB has independent wording and two complete layouts',()=>{
+  const general=load(),ccb=load('ccb');
+  assert.deepEqual(module.loadDefaultCompanyProfile(),general);
+  assert.equal(ccb.name,'公司介绍2026.10（建行版）.docx');
+  assert.deepEqual(ccb.sections.map(section=>section.layout),['narrative','kpi']);
+  const shareholder=profile=>profile.sections[0].columns.find(column=>column.role==='shareholder').entries.map(e=>e.text).join('\n');
+  assert.match(shareholder(general),/全面领先/);assert.match(shareholder(general),/资本实力位居行业最前列/);
+  assert.doesNotMatch(shareholder(ccb),/全面领先|资本实力位居行业最前列/);
+  assert.match(shareholder(ccb),/长期、持续的综合金融服务商/);
+  const kpiValues=profile=>profile.sections[1].columns.map(c=>({role:c.role,subject:c.subject,entries:c.entries.map(({key,text})=>({key,text}))}));
+  assert.deepEqual(kpiValues(ccb),kpiValues(general));
+  ccb.sections[0].columns[0].entries[0].text='changed';assert.notEqual(load('ccb').sections[0].columns[0].entries[0].text,'changed');
+  assert.throws(()=>load('unknown'),/版本/);
+});
+
+test('each downloadable Word is exactly the matching built-in reference with metadata removed',async()=>{
+  assert.equal(typeof module.getDefaultCompanyTemplate,'function');
+  for(const variant of ['general','ccb']){
+    const descriptor=module.getDefaultCompanyTemplate(variant),bytes=await readFile(new URL(descriptor.url)),profile=load(variant);
+    assert.equal(descriptor.name,profile.name);assert.equal(descriptor.sha256,profile.sha256);
+    assert.equal(createHash('sha256').update(bytes).digest('hex'),profile.sha256);
+    assert.deepEqual(await parseCompanyProfile({name:descriptor.name,bytes}),profile);
+    const zip=await JSZip.loadAsync(bytes);
+    assert.ok(!Object.keys(zip.files).some(name=>name.startsWith('docProps/')||name.startsWith('customXml/')));
+    assert.doesNotMatch(await zip.file('_rels/.rels').async('string'),/docProps/);
+    assert.doesNotMatch(await zip.file('[Content_Types].xml').async('string'),/docProps/);
+    const body=await zip.file('word/document.xml').async('string');
+    assert.ok(body.includes(variant==='general'?'通用版本':'建行版本'));
+    assert.ok(!body.includes(variant==='general'?'建行版本':'通用版本'));
+    const template=await readTemplate({name:descriptor.name,bytes});assert.equal(new Set(template.rows.map(row=>row.tableId)).size,2);
+  }
+  assert.throws(()=>module.getDefaultCompanyTemplate('unknown'),/版本/);
 });
 
 test('built-in profile is a fresh plain object and cannot be corrupted by a previous task',()=>{

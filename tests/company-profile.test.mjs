@@ -42,6 +42,45 @@ test('profile is serializable, reads both layouts independently and leaves sourc
  assert.equal(x.version,'2032.04');assert.match(x.sha256,/^[0-9a-f]{64}$/);assert.deepEqual(x,JSON.parse(JSON.stringify(x)));assert.deepEqual(file.bytes,original);
  assert.deepEqual(x.sections.map(s=>s.layout),['narrative','kpi']);assert.ok(JSON.stringify(x.sections[0]).includes('2031年6月末'));assert.ok(JSON.stringify(x.sections[1]).includes('2032.3.31'));
 });
+
+test('explicit general and CCB headings isolate both layouts and their source text',async()=>{
+ const general=narrative()+kpi(),ccb=(narrative()+kpi()).replace('星河证券股份有限公司是综合金融服务商。','星河证券股份有限公司提供金融服务。').replace('29个省市自治区','28个省市自治区');
+ const file=await doc(p('通用版本')+general+p('建行版本')+ccb),bytes=file.bytes.slice();
+ const all=await parseCompanyProfile(file);assert.equal(all.sections.length,4,'legacy callers keep the original unfiltered behavior');
+ for(const variant of ['general','ccb']){
+  const selected=await parseCompanyProfile(file,{variant}),texts=selected.sourceTexts.map(p=>p.text).join('\n');
+  assert.deepEqual(selected.sections.map(s=>s.layout),['narrative','kpi']);
+  assert.match(texts,variant==='general'?/通用版本/:/建行版本/);
+  assert.doesNotMatch(texts,variant==='general'?/建行版本|提供金融服务|28个省市自治区/:/通用版本|是综合金融服务商|29个省市自治区/);
+  const target=await readTemplate(await doc(narrative()+kpi(),'旧一页通.docx')),review=applyCompanyProfile(task(target),selected);
+  assert.ok(!review.warnings.some(w=>w.includes('无法唯一匹配')));
+  const result=target.paragraphs.map(p=>revised(review.materials[0],p.id)).join('\n');
+  assert.match(result,variant==='general'?/29个省市自治区/:/28个省市自治区/);
+ }
+ assert.deepEqual(file.bytes,bytes);
+});
+
+test('variant selection preserves unlabelled uploads and rejects absent or unknown labelled versions',async()=>{
+ const plain=await doc(narrative()+kpi()),legacy=await parseCompanyProfile(plain);
+ for(const variant of ['general','ccb'])assert.deepEqual(await parseCompanyProfile(plain,{variant}),legacy);
+ const generalOnly=await doc(p('通用版')+narrative());
+ await assert.rejects(parseCompanyProfile(generalOnly,{variant:'ccb'}),/未找到.*建行版本/);
+ const ccbOnly=await doc(p('建行版')+narrative());
+ await assert.rejects(parseCompanyProfile(ccbOnly,{variant:'general'}),/未找到.*通用版本/);
+ for(const variant of ['other','constructor','__proto__'])await assert.rejects(parseCompanyProfile(plain,{variant}),/版本/);
+});
+
+test('selected version retains only its referenced notes and does not cross the next heading',async()=>{
+ const body=p('通用版本')+narrative().replace(p(sourceFoot),'').replace(run('荣获43座业内权威奖项“金牛奖”'),run('荣获43座业内权威奖项“金牛奖”')+'<w:r><w:footnoteReference w:id="3"/></w:r>')+p('建行版本')+narrative().replace(p(sourceFoot),'').replace(run('荣获43座业内权威奖项“金牛奖”'),run('荣获43座业内权威奖项“金牛奖”')+'<w:r><w:footnoteReference w:id="4"/></w:r>');
+ const notes=`<w:footnotes xmlns:w="${W}"><w:footnote w:id="3">${p('数据来源：星河资管。统计时间为2012年-2032年。')}</w:footnote><w:footnote w:id="4">${p('数据来源：星河资管。统计时间为2012年-2031年。')}</w:footnote></w:footnotes>`;
+ const file=await doc(body,'公司介绍2032.04.docx',{'word/footnotes.xml':notes});
+ for(const variant of ['general','ccb']){
+  const selected=await parseCompanyProfile(file,{variant}),text=JSON.stringify(selected);
+  assert.equal(selected.sections.length,1);assert.equal(selected.sections[0].notes.length,1);
+  assert.match(text,variant==='general'?/2012年-2032年/:/2012年-2031年/);
+  assert.doesNotMatch(text,variant==='general'?/2012年-2031年/:/2012年-2032年/);
+ }
+});
 test('trust/advisor columns, compound runs, joint source and optional content stay correctly scoped',async()=>{
  const body=table([row([p('受托人：')+p('晨光信托有限公司'),p('投资顾问：')+p('星河资产管理')]),row([p('晨光信托资产管理规模8万亿元，经验30年。'),bullets(true,true)+p('特色业务由专门团队提供。')]),row([p('数据来源：晨光信托、星河资管。星河资管获得金牛奖颁奖机构为示例证券报，统计时间为2012年-2030年；近两年管理人类获奖情况为2031.5-三年期示例奖。')+p('星河旧公司更名为星河资产管理。')])]);
  const t=await readTemplate(await doc(body,'信托一页通.docx'));const x=applyCompanyProfile(task(t),await profile());const m=x.materials[0];
