@@ -3,7 +3,7 @@ import {currentMonth,deliveryName,resolveProductionMonth,monthInputValue,uniqueD
 const $=id=>document.getElementById(id);
 const supplementKinds=['date','benchmark','code'];
 const performanceKeys=['threshold1','ratio1','threshold2','ratio2'];
-const state={contract:null,templates:[],task:null,filter:'focus',busy:false,urls:[],month:currentMonth(),manualMonth:undefined,monthValid:true,started:new Date(),run:0,company:null,companyIsDefault:false,companyReady:false,companyPersisted:false,companyStored:false,companyWarning:'',store:null,reviewApi:null,calendar:null,calendarMatches:[],supplementPreview:null};
+const state={contract:null,templates:[],task:null,filter:'focus',busy:false,urls:[],month:currentMonth(),manualMonth:undefined,monthValid:true,started:new Date(),run:0,company:null,companyVariant:'general',companySessions:{},companyBytes:null,companyTemplate:null,companyDownloadUrl:null,companyIsDefault:false,companyReady:false,companyPersisted:false,companyStored:false,companyWarning:'',store:null,reviewApi:null,calendar:null,calendarMatches:[],supplementPreview:null};
 const el=(tag,className,text)=>{const n=document.createElement(tag);if(className)n.className=className;if(text!==undefined)n.textContent=text;return n;};
 const readableSize=bytes=>bytes>=1048576?(bytes/1048576).toFixed(1)+' MB':Math.max(1,Math.round(bytes/1024))+' KB';
 const nextPaint=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
@@ -27,25 +27,41 @@ function refreshSelection(){
  $('analyze-button').disabled=state.busy||!state.companyReady||!state.monthValid||!state.contract||state.templates.length===0;
  $('generate-button').disabled=state.busy||!state.monthValid||!state.task;
  $('company-input').disabled=state.busy||!state.companyReady;$('company-clear').disabled=state.busy||!state.companyReady;
+ $('company-variant').disabled=state.busy||!state.companyReady;$('company-download').setAttribute('aria-disabled',String(state.busy||!state.companyReady));
  $('selection-hint').textContent=state.contract&&state.templates.length?`已选择合同和 ${state.templates.length} 份物料模板。`:'选好文件后，开始核对。';
 }
 function invalidate(){discardSupplementPreview();state.task=null;state.calendar=null;state.calendarMatches=[];$('calendar-input').value='';$('calendar-row').replaceChildren();$('calendar-row').hidden=true;$('calendar-row-label').hidden=true;$('calendar-row-detail').replaceChildren();$('calendar-status').textContent='Excel 在本机读取。根据合同产品匹配，保留来源行供核对。';for(const kind of supplementKinds)$('supplement-'+kind).value='';for(const key of performanceKeys)$('performance-'+key).value='';$('performance-mode').value='single';syncPerformanceMode();$('supplement-preview').hidden=true;$('supplement-notice').hidden=true;$('review-section').hidden=true;clearDownloads();changeStep('upload');$('error-panel').hidden=true;}
+const companyVersionLabel=()=>state.companyVariant==='ccb'?'建行版':'通用版';
+const companySessionKeys=['company','companyBytes','companyTemplate','companyIsDefault','companyPersisted','companyStored','companyWarning'];
+function rememberCompany(){state.companySessions[state.companyVariant]=Object.fromEntries(companySessionKeys.map(k=>[k,state[k]]));}
 function showCompany(){
  const prefix=state.company?(state.companyIsDefault?`网页内置：${state.company.name}。未上传新版时自动使用。`:`当前版本：${state.company.name}。${state.companyPersisted?'已保存在此浏览器，下次自动沿用。':'仅本次使用，尚未保存。'}`):'公司介绍暂未加载，本轮只更新产品要素。';
- $('company-status').textContent=prefix+(state.companyWarning?' '+state.companyWarning:'');$('company-clear').hidden=(!state.company||state.companyIsDefault)&&!state.companyStored;
+ $('company-status').textContent=companyVersionLabel()+' · '+prefix+(state.companyWarning?' '+state.companyWarning:'');$('company-clear').hidden=(!state.company||state.companyIsDefault)&&!state.companyStored;
+ $('company-variant').value=state.companyVariant;
+ if(state.companyDownloadUrl)URL.revokeObjectURL(state.companyDownloadUrl);state.companyDownloadUrl=null;
+ const link=$('company-download');link.hidden=!state.company;link.textContent='下载当前模板';link.setAttribute('aria-label','下载当前公司介绍模板（'+companyVersionLabel()+'）');
+ if(state.companyBytes){state.companyDownloadUrl=URL.createObjectURL(new Blob([state.companyBytes],{type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}));link.href=state.companyDownloadUrl;link.download=state.company.name;}
+ else{link.href=state.companyTemplate?.url||'';link.download=state.companyTemplate?.name||'';}
+ if(state.companyReady)rememberCompany();
 }
-async function useDefaultCompany(){const {loadDefaultCompanyProfile}=await import('./default-company-profile.js');state.company=loadDefaultCompanyProfile();state.companyIsDefault=true;state.companyPersisted=false;}
+async function useDefaultCompany(){const {loadDefaultCompanyProfile,getDefaultCompanyTemplate}=await import('./default-company-profile.js?v=20261029-company-versions');state.company=loadDefaultCompanyProfile(state.companyVariant);state.companyTemplate=getDefaultCompanyTemplate(state.companyVariant);state.companyBytes=null;state.companyIsDefault=true;state.companyPersisted=false;}
 async function restoreCompany(){
  try{
-  await useDefaultCompany();const {createProfileStore}=await import('./profile-store.js');state.store=createProfileStore();const record=await state.store.load();
+  const {createProfileStore}=await import('./profile-store.js?v=20261029-company-versions');state.store=createProfileStore({variant:state.companyVariant});
+  if(state.companySessions[state.companyVariant]){Object.assign(state,state.companySessions[state.companyVariant]);return;}
+  state.company=null;state.companyBytes=null;state.companyTemplate=null;state.companyStored=false;state.companyWarning='';await useDefaultCompany();const record=await state.store.load();
   if(record){
-   state.companyStored=true;const {parseCompanyProfile}=await import('./company-profile.js');const profile=await parseCompanyProfile({name:record.name,bytes:record.bytes});
+   state.companyStored=true;const {parseCompanyProfile}=await import('./company-profile.js?v=20261029-company-versions');const profile=await parseCompanyProfile({name:record.name,bytes:record.bytes},{variant:state.companyVariant});
    if(profile.sha256!==record.sha256)throw new Error('已保存的公司介绍校验不一致，请重新上传。');
-   const {isSupersededCompanyProfile}=await import('./default-company-profile.js');
+   const {isSupersededCompanyProfile}=await import('./default-company-profile.js?v=20261029-company-versions');
    if(isSupersededCompanyProfile(profile)){
     state.companyWarning='已自动采用规模日期更正后的公司介绍。';
     try{state.companyStored=!await state.store.clearIfSha256(profile.sha256);}catch{state.companyWarning+='旧版本缓存暂未清除，但不会覆盖更正后的内置版本。';}
-   }else{state.company=profile;state.companyIsDefault=false;state.companyPersisted=true;}
+   }else{
+    const {prepareCompanyTemplate}=await import('./company-template.js?v=20261029-company-versions');const prepared=await prepareCompanyTemplate({name:record.name,bytes:record.bytes},{variant:state.companyVariant});
+    const unchanged=prepared.name===record.name&&prepared.bytes.length===record.bytes.length&&prepared.bytes.every((b,i)=>b===record.bytes[i]);
+    const current=unchanged?profile:await parseCompanyProfile(prepared,{variant:state.companyVariant});state.company=current;state.companyBytes=prepared.bytes;state.companyIsDefault=false;state.companyPersisted=true;
+   }
   }
  }
  catch(error){if(error.code==='PROFILE_CACHE_INVALID')state.companyStored=true;state.companyWarning='未能恢复已保存版本：'+(error.message||String(error));}
@@ -55,15 +71,20 @@ async function selectCompany(files){
  if(state.busy)return;if(!state.companyReady){showError(new Error('正在读取上次保存的公司介绍，请稍后再上传。'));return;}const list=[...files];if(!list.length)return;
  if(list.length!==1||! /\.docx$/i.test(list[0].name)){showError(new Error('公司介绍请选择一份 DOCX 文件。'));return;}
  const file=list[0];if(file.size>60*1024*1024){showError(new Error('公司介绍文件请控制在60 MB以内。'));return;}
- setBusy(true);progress('正在读取公司介绍','识别两种版式，成功后替换此浏览器保存的版本。');await nextPaint();
- try{const {parseCompanyProfile}=await import('./company-profile.js');const bytes=new Uint8Array(await file.arrayBuffer());const profile=await parseCompanyProfile({name:file.name,bytes});let persisted=false;state.companyWarning='';
-  try{if(!state.store){const {createProfileStore}=await import('./profile-store.js');state.store=createProfileStore();}await state.store.save({schemaVersion:1,name:file.name,sha256:profile.sha256,uploadedAt:new Date().toISOString(),bytes,profile});persisted=true;state.companyStored=true;}
+ setBusy(true);progress('正在读取公司介绍','识别'+companyVersionLabel()+'的两种版式，成功后仅替换此版本。');await nextPaint();
+ try{const {parseCompanyProfile}=await import('./company-profile.js?v=20261029-company-versions');const {prepareCompanyTemplate}=await import('./company-template.js?v=20261029-company-versions');const prepared=await prepareCompanyTemplate({name:file.name,bytes:new Uint8Array(await file.arrayBuffer())},{variant:state.companyVariant}),bytes=prepared.bytes;const profile=await parseCompanyProfile(prepared,{variant:state.companyVariant});let persisted=false;state.companyWarning='';
+  try{if(!state.store){const {createProfileStore}=await import('./profile-store.js?v=20261029-company-versions');state.store=createProfileStore({variant:state.companyVariant});}await state.store.save({schemaVersion:1,name:prepared.name,sha256:profile.sha256,uploadedAt:new Date().toISOString(),bytes,profile});persisted=true;state.companyStored=true;}
   catch(error){state.companyWarning='此版本本次可用，但未能保存；下次请重新上传。'+(error.message||'');}
-  state.company=profile;state.companyIsDefault=false;state.companyPersisted=persisted;invalidate();showCompany();
+  state.company=profile;state.companyBytes=bytes;state.companyIsDefault=false;state.companyPersisted=persisted;invalidate();showCompany();
  }catch(error){showError(new Error('公司介绍未更新，仍保留此前版本。'+(error.message||String(error))));}
  finally{$('company-input').value='';setBusy(false);$('progress-panel').hidden=true;}
 }
 $('company-input').addEventListener('change',e=>selectCompany(e.target.files));
+$('company-variant').addEventListener('change',async()=>{
+ const variant=$('company-variant').value;if(state.busy||!state.companyReady||!['general','ccb'].includes(variant)){$('company-variant').value=state.companyVariant;return;}if(variant===state.companyVariant)return;
+ rememberCompany();state.companyVariant=variant;state.companyReady=false;setBusy(true);invalidate();try{await restoreCompany();}finally{setBusy(false);}
+});
+$('company-download').onclick=e=>{if(state.busy||!state.companyReady||!state.company)e.preventDefault();};
 $('company-clear').onclick=async()=>{if(state.busy)return;setBusy(true);try{if(state.companyStored){if(!state.store)throw new Error('尚未连接本机保存空间，请刷新后再清除。');await state.store.clear();}state.companyStored=false;await useDefaultCompany();state.companyWarning='';invalidate();showCompany();}catch(error){showError(error);}finally{setBusy(false);}};
 function selectFiles(kind,files){
  if(state.busy)return;
@@ -103,7 +124,7 @@ $('analyze-button').onclick=async()=>{
   if(!templates.length)throw new Error('没有可更新的模板。'+inputIssues.map(i=>`${i.sourceName}：${i.message}`).join('\n'));
   progress('正在统一核对产品要素','合并共同需求，查找合同依据，再定位各物料的改动。');await nextPaint();
   const task=await analyzeMaterials(contract,templates,{now:state.started,month:state.month});task.now=state.started;task.inputIssues=inputIssues;
-  if(state.company){progress('正在核对一页通公司介绍',state.company.name);await nextPaint();const {applyCompanyProfile}=await import('./company-profile.js');await applyCompanyProfile(task,state.company);}
+  if(state.company){progress('正在核对一页通公司介绍',companyVersionLabel()+' · '+state.company.name);await nextPaint();const {applyCompanyProfile}=await import('./company-profile.js?v=20261029-company-versions');await applyCompanyProfile(task,state.company);}
   if(run!==state.run)return;
   state.task=task;const feeGroups=groups().filter(g=>g.kind==='performance');if(feeGroups.length===1&&groupFacts(feeGroups[0]).some(f=>f.key==='performance_R2'))$('performance-mode').value='tiered';syncPerformanceMode();renderReview();$('upload-section').hidden=true;$('review-section').hidden=false;changeStep('review');
  }catch(error){showError(error);}finally{if(run===state.run){setBusy(false);$('progress-panel').hidden=true;}}
@@ -336,7 +357,7 @@ calendarDrop.addEventListener('dragover',e=>{if(!isFileDrag(e))return;e.preventD
 calendarDrop.addEventListener('dragleave',e=>{if(!calendarDrop.contains(e.relatedTarget))calendarDrop.classList.remove('dragging');});
 calendarDrop.addEventListener('drop',e=>{e.preventDefault();calendarDrop.classList.remove('dragging');return selectCalendar(e.dataTransfer?.files);});
 function renderReview(){
- const task=state.task;$('target-name').textContent=task.target.name;$('review-subtitle').textContent=`${task.templates.length} 份模板 · 同口径要素共享核对 · 文件名月份 ${task.month}`+(state.company?' · 公司介绍：'+state.company.name:'');
+ const task=state.task;$('target-name').textContent=task.target.name;$('review-subtitle').textContent=`${task.templates.length} 份模板 · 同口径要素共享核对 · 文件名月份 ${task.month}`+(state.company?' · 公司介绍（'+companyVersionLabel()+'）：'+state.company.name:'');
  $('count-facts').textContent=groups().length;$('count-updates').textContent=task.materials.reduce((n,m)=>n+m.operations.filter(o=>o.kind==='replace').length,0);$('count-pending').textContent=groups().filter(g=>groupFacts(g).some(f=>f.status!=='verified')||sectionPending(sectionReview(g))).length;$('count-materials').textContent=task.materials.length;
  const warnings=[...(task.warnings||[]),...(task.inputIssues||[]).map(i=>`${i.sourceName}：${i.reason==='failed'?'未处理，':''}${i.message}`),...task.materials.flatMap(m=>(m.warnings||[]).map(w=>m.template.name+'：'+(typeof w==='string'?w:w.message||String(w))))];$('warnings').replaceChildren();for(const warning of [...new Set(warnings)])$('warnings').append(el('p','',typeof warning==='string'?warning:warning.message||String(warning)));
  const deliveryNames=uniqueDeliveryNames(task.materials.map(materialName));
@@ -348,7 +369,7 @@ function generationStatus(message,kind='progress'){const box=$('generation-statu
 function deliveryIssues(task,result){return [...(task.inputIssues||[]).filter(i=>i.reason==='failed'),...(result.failures||[])];}
 function deliveryNotes(task,result){return [...(task.warnings||[]).map(w=>typeof w==='string'?w:w.message||String(w)),...(task.inputIssues||[]).map(i=>`${i.sourceName}：${i.reason==='failed'?'未生成，':''}${i.message}`),...task.materials.flatMap(m=>(m.warnings||[]).map(w=>m.template.name+'：'+(typeof w==='string'?w:w.message||String(w)))),...result.files.flatMap(f=>(f.report?.repairs||[]).map(r=>f.name+'：'+(typeof r==='string'?r:r.message||r.kind))),...(result.failures||[]).map(f=>`未生成 ${f.sourceName}：${f.message}`)];}
 function reviewText(task,result){
- const lines=['物料审阅清单',`目标产品：${task.target.name}`,`制作月份：${task.month}`,`公司介绍：${state.company?.name||'未使用'}`,'','本次更新产品要素及匹配到的一页通公司介绍；历史业绩及人员介绍保持原样。','黄色表示原值仍需确认，不代表合同已核实。','','输出文件：',...result.files.map(f=>f.name),'','核对事项：'];
+ const lines=['物料审阅清单',`目标产品：${task.target.name}`,`制作月份：${task.month}`,`公司介绍：${state.company?companyVersionLabel()+' · '+state.company.name:'未使用'}`,'','本次更新产品要素及匹配到的一页通公司介绍；历史业绩及人员介绍保持原样。','黄色表示原值仍需确认，不代表合同已核实。','','输出文件：',...result.files.map(f=>f.name),'','核对事项：'];
  const sections=groups().map(group=>({group,section:sectionReview(group)})).filter(x=>x.section),coveredIds=new Set(sections.flatMap(x=>x.group.factIds));
  for(const f of task.facts){lines.push(`${f.label}｜${f.status==='verified'?(isConfirmed(f)?'用户确认原值':f.source==='user_calendar'?'产品日历补充':f.source==='user_custom_section'?'用户自定义整项替换':f.source==='user'?'用户补充':f.source==='company'?'公司介绍依据':'合同核对'):'保留待核'}｜${f.value??'保留各模板原值'}`,f.reason||'');for(const e of(f.evidence||[]).filter(e=>!coveredIds.has(f.id)||sourceTitle(e)!=='合同依据').slice(0,2))lines.push(sourceTitle(e)+'：'+e.quote);lines.push('');}
  for(const {group,section}of sections){
