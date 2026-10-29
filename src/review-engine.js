@@ -11,7 +11,8 @@ import {getTradingDays} from './trading-calendar.js?v=20261026-openings';
 import {buildRedemptionTierIndex,matchTemplateRedemptionTier,resolveRedemptionTier} from './redemption-tiers.js?v=20261027-custom-investment';
 import {previewFeeText,applyFeeText,refreshFeeTextOperations,releaseFeeText,assertFeeActionScope} from './fee-text-supplement.js?v=20261027-custom-investment';
 import {simplifyEqualFeeTiers} from './equal-fee-tiers.js?v=20261027-custom-investment';
-import {previewCustomSection as previewCustomSectionText,applyCustomSectionOverride,refreshCustomSectionOperations,refreshCustomSectionFields,releaseCustomSection} from './custom-section.js?v=20261027-custom-investment';
+import {verbalRiskCandidates} from './risk-rating.js?v=20261029-risk-wording';
+import {previewCustomSection as previewCustomSectionText,applyCustomSectionOverride,refreshCustomSectionOperations,refreshCustomSectionFields,releaseCustomSection} from './custom-section.js?v=20261029-risk-custom';
 const PRODUCT_END='(?:集合资金信托计划|集合资产信托计划|集合资产管理计划|单一资产管理计划|资产管理计划|证券投资基金|信托计划)';
 const NAME_LABEL=/^(?:产品名称|产品全称|信托名称|信托计划名称|基金名称|计划名称|资产管理计划名称|产品简称)$/;
 const MARKETING=/历史业绩|产品表现|累计增长|最新净值|成立以来|年化收益|产品举例|同策略|代表产品|获奖|金牛奖/;
@@ -264,7 +265,7 @@ function resolveAtom(key,label,rs,scope,target,extra={}){
  const re=/(?:风险等级|风险评级|产品评级|评级)[^。；;\nR]{0,45}(R[1-5])(?:[（(]([^）)]*风险)[）)])?/g;
   const issuerMatches=(m,b)=>{const start=Math.max(b.text.lastIndexOf('\n',m.index-1),b.text.lastIndexOf('。',m.index-1),b.text.lastIndexOf('；',m.index-1),b.text.lastIndexOf(';',m.index-1))+1;const context=b.text.slice(start,m.index+m[0].length),distributor=/(?:销售机构|代销机构|销售银行)[^。；;\n]{0,30}(?:风险等级|风险评级|评级|评定)/.test(context);return scope.issuer==='distributor'?distributor:!distributor;};
   const result=findMatches(allowed,re,(m,b)=>issuerMatches(m,b)?m[1]:null);
-  if(!result.length)result.push(...findMatches(allowed,/(?:风险等级|风险评级)[^。；;\n]{0,15}?(中低风险|中高风险|中风险|低风险|高风险)/g,(m,b)=>issuerMatches(m,b)?({'低风险':'R1','中低风险':'R2','中风险':'R3','中高风险':'R4','高风险':'R5'})[m[1]]:null));
+  if(!result.length)result.push(...verbalRiskCandidates(allowed,scope.issuer));
   return pick(result,'合同未提供该评级主体的明确评级，保留待核。');
  }
  if(['manager','custodian','advisor','distributor'].includes(key)){

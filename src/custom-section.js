@@ -1,5 +1,5 @@
 // Explicit whole-element wording supplied by the user; no inferred contract authority.
-const labels={investment_ratios:'投资比例',investment_scope:'投资范围'};
+const labels={investment_ratios:'投资比例',investment_scope:'投资范围',investment_strategy:'投资策略',investment_restrictions:'投资限制'};
 const unique=a=>[...new Set(a)];
 const savedKeys=['value','status','source','reason','reasonType','evidence','userConfirmed','_confirmationBefore'];
 const snapshot=f=>Object.fromEntries(savedKeys.map(k=>[k,f[k]]));
@@ -15,7 +15,7 @@ const scopeKey=(task,f)=>JSON.stringify(normalizedScope(task,f));
 const numbering=text=>[...String(text).normalize('NFKC').matchAll(/(?:^|\n)\s*(?:\((\d+)\)|(\d+)[)、.])\s*/g)].map(m=>Number(m[1]||m[2]));
 function selection(task,factIds){
  const selected=unique(factIds||[]).map(id=>task.facts.find(f=>f.id===id));
- if(!selected.length||selected.some(f=>!f)||!labels[selected[0]?.key]||selected.some(f=>f.key!==selected[0].key))throw new Error('自定义整项替换仅适用于同一项投资比例或投资范围。');
+ if(!selected.length||selected.some(f=>!f)||!labels[selected[0]?.key]||selected.some(f=>f.key!==selected[0].key))throw new Error('自定义整项替换仅适用于同一项投资比例、投资范围、投资策略或投资限制。');
  const key=selected[0].key,scope=scopeKey(task,selected[0]);if(selected.some(f=>scopeKey(task,f)!==scope))throw new Error('不同份额、渠道、主体口径或适用条件请分别自定义替换。');
  // A card may start at one old clause; replacing the whole element includes all
  // sibling clauses of the same scope and every associated material.

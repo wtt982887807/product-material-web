@@ -35,6 +35,36 @@ test('custom scope replacement works without matching contract evidence and pres
  const p=engine.previewCustomSection(t,ids(t,'investment_scope'),text);engine.applyCustomSection(t,p);assert.equal(field(t).after,text);
  assert.ok(!field(t).reason.includes('合同有明确依据'));
 });
+for(const [label,key,values,text]of [
+ ['投资策略','investment_strategy',['（1）资产配置策略','（2）债券投资策略','（3）基金投资策略'],'1、资产配置策略\n根据市场变化调整资产配置。\n2、债券投资策略\n控制久期和信用风险。'],
+ ['投资限制','investment_restrictions',['（1）不得投资未上市股权。','（2）单一资产不超过资产净值的10%。','（3）不得从事违规交易。'],'1、不得投资未上市股权。\n2、单一资产不超过资产净值的15%。'],
+])test(`custom ${key} replaces complete same-scope material only after applying and undo restores local supplements`,()=>{
+ const t=task([template('a',label,values),template('b',label,values),template('c','A类份额'+label,values)],[]),selected=t.facts.filter(f=>f.key===key&&!f.scope.share);
+ engine.setSupplement(t,selected[0].id,values[0]+'经确认保留。');
+ const canonicalOps=t=>ops(t).map(os=>os.map(o=>JSON.stringify(o)).sort()),original=t.materials.map(m=>m.fields[1].after),originalOps=canonicalOps(t),before=state(t);
+ const p=engine.previewCustomSection(t,[selected[0].id],text);
+ assert.equal(state(t),before,'pasting and previewing must not apply the replacement');
+ assert.equal(p.label,label);assert.equal(p.entries.length,2);assert.equal(p.factIds.length,selected.length);
+ engine.applyCustomSection(t,p);
+ assert.deepEqual(t.materials.map(m=>m.fields[1].after),[text,text,values.join('\n')]);
+ assert.ok(selected.every(f=>f.source==='user_custom_section'&&f.evidence[0].quote===text));
+ assert.ok(t.materials.slice(0,2).every(m=>m.operations.some(o=>o.before===values[2]&&o.after==='')),'omitted final clauses are removed');
+ assert.throws(()=>engine.setSupplement(t,selected[0].id,'单独补充。'),/撤销|自定义/);
+ engine.undoCustomSection(t,p.id);assert.deepEqual(t.materials.map(m=>m.fields[1].after),original);assert.deepEqual(canonicalOps(t),originalOps);
+});
+test('custom strategy prose does not change contract-title adoption and each mode can be undone before switching',()=>{
+ const values=['1、资产配置策略；2、基金策略'],lines=['三、投资策略','1、资产配置策略','配置说明。','2、基金策略','基金说明。','3、债券投资策略','债券说明。','四、投资限制'];
+ const t=task([template('a','投资策略',values)],lines),selected=ids(t,'investment_strategy');
+ const contract=engine.previewContractSection(t,selected);
+ assert.equal(contract.entries[0].after,'1、资产配置策略；2、基金策略；3、债券投资策略');
+ const text='1、资产配置策略\n本次确认采用的完整策略正文。';
+ const p=engine.previewCustomSection(t,selected,text);engine.applyCustomSection(t,p);assert.equal(field(t).after,text);
+ assert.throws(()=>engine.previewContractSection(t,selected),/先撤销/);
+ engine.undoCustomSection(t,p.id);assert.equal(field(t).after,values[0]);
+ const restored=engine.previewContractSection(t,selected);assert.equal(restored.entries[0].after,contract.entries[0].after);
+ engine.applyContractSection(t,restored);assert.throws(()=>engine.previewCustomSection(t,selected,text),/先撤销/);
+ engine.undoContractSection(t,restored.id);assert.doesNotThrow(()=>engine.previewCustomSection(t,selected,text));
+});
 test('pasted tabs become spaces without blocking the complete replacement or removing newlines',()=>{
  const t=task(),before=state(t),input='1、固定收益类资产：\t20%～100%；\n2、货币市场工具：\t0%～100%。';
  const p=engine.previewCustomSection(t,ids(t),input);assert.equal(state(t),before);

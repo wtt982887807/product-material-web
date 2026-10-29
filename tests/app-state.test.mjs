@@ -232,7 +232,7 @@ test('a missing strategy title has a working on-card preview, apply and undo',as
  const app=createApp({taskFactory:(c,t,o)=>sectionCaseTask(c,t,o,{label:'投资策略',value:'1、资产配置策略；2、基金策略',clauses:['三、投资策略','1、资产配置策略','合理分配。','2、基金策略','优选基金。','3、境外结构化票据投资策略','谨慎管理票据风险。','四、投资限制']})});
  await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
  const card=()=>app.elements.get('facts-list').children.find(n=>descendants(n).some(c=>c.tagName==='strong'&&c.textContent==='投资策略'));
- assert.ok(!descendants(card()).some(n=>n.tagName==='form'));await buttonIn(card(),'预览补齐策略标题').click();
+ assert.ok(!card().children.some(n=>n.tagName==='form'));assert.ok(descendants(card()).some(n=>n.tagName==='summary'&&n.textContent==='分别补充原文'));await buttonIn(card(),'预览补齐策略标题').click();
  assert.ok(descendants(card()).some(n=>n.textContent==='1、资产配置策略；2、基金策略；3、境外结构化票据投资策略'));
  await buttonIn(card(),'确认补齐策略标题').click();assert.ok(app.state.task.materials[0].fields.find(f=>f.label==='投资策略').after.endsWith('3、境外结构化票据投资策略'));
  assert.ok(descendants(card()).some(n=>n.textContent.includes('已采用合同策略标题')));await buttonIn(card(),'撤销采用合同内容').click();assert.equal(app.state.task.materials[0].fields.find(f=>f.label==='投资策略').after,'1、资产配置策略；2、基金策略');
@@ -241,7 +241,7 @@ test('large restriction differences give a concise complete-evidence cue instead
  const clauses=['三、投资限制',...Array.from({length:15},(_,i)=>`（${i+1}）不得投资类别${i+1}的特定资产。`),'上述投资比例按照穿透原则合并计算。','四、风险揭示'];
  const app=createApp({taskFactory:(c,t,o)=>sectionCaseTask(c,t,o,{label:'投资限制',value:'不得进行违规投资。',clauses})});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
  const card=app.elements.get('facts-list').children.find(n=>descendants(n).some(c=>c.tagName==='strong'&&c.textContent==='投资限制')),nodes=descendants(card);
- assert.ok(nodes.some(n=>/建议使用完整合同依据.*15项.*1段/.test(n.textContent)));assert.ok(!nodes.some(n=>n.tagName==='form'||n.textContent==='逐项查看合同与当前物料'));
+ assert.ok(nodes.some(n=>/建议使用完整合同依据.*15项.*1段/.test(n.textContent)));assert.ok(!card.children.some(n=>n.tagName==='form'));assert.ok(!nodes.some(n=>n.textContent==='逐项查看合同与当前物料'));
  const evidence=nodes.filter(n=>n.tagName==='blockquote').map(n=>n.textContent).join('\n');assert.ok(evidence.includes('（15）'));assert.ok(evidence.includes('穿透原则'));
 });
 
@@ -524,15 +524,19 @@ test('fee card accepts complete wording over a single-rate template and offers u
  await buttonIn(entry.form,'确认并应用补充').click();assert.equal(app.state.task.materials[0].fields.find(f=>f.label==='退出费率').after,full);
  entry=supplementEntry(app,'退出费率');assert.ok(entry.input);await buttonIn(app.elements.get('facts-list'),'撤销整段修改').click();assert.equal(app.state.task.materials[0].fields.find(f=>f.label==='退出费率').after,'退出费率0.5%。');
 });
-test('investment range and ratio cards offer an explicit complete custom replacement with preview and undo',async()=>{
- for(const label of ['投资比例','投资范围']){
-  const old='（1）债券：0%—80%；\n（2）公募基金：0%—80%；\n（3）衍生品：0%—20%。';
+test('investment range, ratio, strategy and restriction cards offer an explicit complete custom replacement with preview and undo',async()=>{
+ for(const [label,old,replacement]of [
+  ['投资比例','（1）债券：0%—80%；\n（2）公募基金：0%—80%；\n（3）衍生品：0%—20%。','（1）债券：20%—100%；\n（2）货币市场工具：0%—80%。'],
+  ['投资范围','（1）债券。\n（2）公募基金。\n（3）金融衍生品。','（1）债券。\n（2）货币市场工具。'],
+  ['投资策略','（1）资产配置策略\n（2）债券投资策略\n（3）基金投资策略','（1）资产配置策略\n根据市场变化调整配置。\n（2）债券投资策略'],
+  ['投资限制','（1）不得从事违规交易。\n（2）单一资产不超过10%。\n（3）不得投资未上市股权。','（1）不得从事违规交易。\n（2）单一资产不超过15%。'],
+ ]){
   const app=createApp({taskFactory:(c,t,o)=>sectionCaseTask(c,t,o,{label,value:old,clauses:[]})});await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();
   const card=()=>app.elements.get('facts-list').children.find(n=>descendants(n).some(c=>c.tagName==='strong'&&c.textContent===label));
   assert.ok(descendants(card()).some(n=>n.tagName==='summary'&&n.textContent==='分别补充原文'));
   assert.ok(descendants(card()).some(n=>n.tagName==='summary'&&n.textContent==='自定义替换'));
   let input=descendants(card()).find(n=>n['aria-label']==='自定义替换'+label);assert.ok(input);
-  input.value='（1）债券：20%—100%；\n（2）货币市场工具：0%—80%。';
+  input.value=replacement;
   await buttonIn(card(),'预览整项替换').click();assert.equal(app.state.task.materials[0].fields[1].after,old);
   const confirmed=buttonIn(card(),'确认整项替换');assert.ok(confirmed);await confirmed.click();
   assert.equal(app.state.task.materials[0].fields[1].after,input.value);

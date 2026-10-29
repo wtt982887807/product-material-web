@@ -143,7 +143,7 @@ $('analyze-button').onclick=async()=>{
  if(state.busy||!state.companyReady||!state.managerReady)return;try{updateMonth();}catch(error){showError(error);return;}const run=++state.run;invalidate();setBusy(true);progress('正在读取合同','建立本次合同索引，保留文字出处。');await nextPaint();
  try{
   if(!state.manager||!state.applyManagerProfile){await restoreManager();if(!state.manager||!state.applyManagerProfile)throw new Error('经理介绍功能暂未加载完成，请刷新网页后重新核对。');}
-  const [{readWordContract,readWordTemplate},reviewApi]=await Promise.all([import('./word-input.js?v=20261027-custom-investment'),import('./review-engine.js?v=20261029-manager')]);state.reviewApi=reviewApi;const {analyzeMaterials}=reviewApi;
+  const [{readWordContract,readWordTemplate},reviewApi]=await Promise.all([import('./word-input.js?v=20261027-custom-investment'),import('./review-engine.js?v=20261029-risk-custom')]);state.reviewApi=reviewApi;const {analyzeMaterials}=reviewApi;
   const contract=await readWordContract({name:state.contract.name,bytes:new Uint8Array(await state.contract.arrayBuffer())},{onProgress:progress});
   const templates=[],inputIssues=[],seen=new Set();
   for(const [i,file]of state.templates.entries()){
@@ -178,7 +178,7 @@ function renderFact(fact){
  for(const m of state.task.materials){const fields=m.fields.filter(f=>f.factIds?.includes(fact.id));for(const field of fields){const occurrence=el('div','occurrence');occurrence.append(el('strong','',m.template.name+' · '+field.label));const before=field.before||'';const after=field.after??before;if(before!==after){const b=el('p');b.append(el('del','',before));const a=el('p');a.append(el('ins','',after));occurrence.append(b,a);}else occurrence.append(el('p','',before));details.append(occurrence);}}
  row.append(details);
  if(fact.status!=='verified'){
-  const form=el('form','supplement');const input=el('input');input.placeholder='有明确补充资料时，可在这里填写';input.setAttribute('aria-label','补充'+(fact.label||fact.key));const button=el('button','','确认补充');button.type='submit';form.append(input,button);form.onsubmit=async e=>{e.preventDefault();if(!input.value.trim())return;try{const {setSupplement}=await import('./review-engine.js?v=20261029-manager');state.task=await setSupplement(state.task,fact.id,input.value);clearDownloads();$('error-panel').hidden=true;changeStep('review');renderReview();}catch(error){showError(error);}};row.append(form);
+  const form=el('form','supplement');const input=el('input');input.placeholder='有明确补充资料时，可在这里填写';input.setAttribute('aria-label','补充'+(fact.label||fact.key));const button=el('button','','确认补充');button.type='submit';form.append(input,button);form.onsubmit=async e=>{e.preventDefault();if(!input.value.trim())return;try{const {setSupplement}=await import('./review-engine.js?v=20261029-risk-custom');state.task=await setSupplement(state.task,fact.id,input.value);clearDownloads();$('error-panel').hidden=true;changeStep('review');renderReview();}catch(error){showError(error);}};row.append(form);
  }
  return row;
 }
@@ -276,7 +276,7 @@ function supplementForm(group,label){
  return form;
 }
 function customSectionFor(group){const id=groupFacts(group).find(f=>f.customSectionOverrideId)?.customSectionOverrideId;return state.task.customSectionOverrides?.[id];}
-function canCustomizeSection(group){const keys=[...new Set(groupFacts(group).map(f=>f.key))];return keys.length===1&&['investment_scope','investment_ratios'].includes(keys[0]);}
+function canCustomizeSection(group){const keys=[...new Set(groupFacts(group).map(f=>f.key))];return keys.length===1&&['investment_scope','investment_ratios','investment_strategy','investment_restrictions'].includes(keys[0]);}
 function renderInvestmentEvidence(details,section){
  const key=s=>String(s).normalize('NFKC').replace(/\s+/g,''),versions=[];
  for(const e of section.evidence||[]){const existing=versions.find(v=>key(v.quote)===key(e.quote));if(existing)existing.locations+=(e.duplicateCount||0)+1;else versions.push({...e,locations:(e.duplicateCount||0)+1});}
@@ -318,7 +318,7 @@ function renderGroup(group,section=sectionReview(group)){
  const reasons=[...new Set(fs.map(f=>f.reason).filter(Boolean))];if(!section?.preferCompleteEvidence)for(const reason of reasons)row.append(el('p','fact-reason',reason));
  if(custom)row.append(el('p','fact-reason','已自定义替换'));else if(section)renderSectionReview(row,section);
  const details=el('details');details.append(el('summary','',section?'查看完整合同依据与物料位置':'查看依据与物料位置'));
- if(customizable&&section?.evidence?.length)renderInvestmentEvidence(details,section);
+ if(customizable&&['investment_scope','investment_ratios'].includes(section?.key)&&section?.evidence?.length)renderInvestmentEvidence(details,section);
  else for(const evidence of section?.evidence||[]){const label=`完整合同依据 · 共 ${evidence.itemCount} 项`+(evidence.noteCount?`＋${evidence.noteCount} 段补充说明`:'')+(evidence.duplicateCount>0?` · 合同中 ${evidence.duplicateCount+1} 处内容一致，已合并展示`:'');if(evidence.variantRole==='other_version'){const alternate=el('details');alternate.append(el('summary','','其他版本依据 · 共 '+evidence.itemCount+' 项'),el('p','',label),el('blockquote','section-evidence',evidence.quote));details.append(alternate);}else details.append(el('p','',label),el('blockquote','section-evidence',evidence.quote));}
  const seenEvidence=new Set();for(const f of fs)for(const e of(f.evidence||[])){if(section?.evidence?.length&&sourceTitle(e)==='合同依据')continue;const k=e.blockId+'|'+e.quote;if(seenEvidence.has(k))continue;seenEvidence.add(k);details.append(el('p','',sourceTitle(e)),el('blockquote','',e.quote||''));}
  if(customizable)details.append(el('h4','','物料原文与当前结果'));
