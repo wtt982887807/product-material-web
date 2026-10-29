@@ -462,6 +462,20 @@ function validateIntroductionReview(review){
   }
 }
 
+async function formatPptIntroductionPunctuation(pkg,review){
+  const paragraphs=new Map(review.template.paragraphs.map(p=>[p.id,p])),selected=new Set(review.selectedPages||[]);
+  const ids=new Set((review.fields||[]).filter(f=>profileSource(f.source)).flatMap(f=>f.paragraphIds||[]));
+  for(const id of ids){
+    const source=paragraphs.get(id);if(!source||!selected.has(source.page))continue;
+    const doc=await pkg.xml(source.part),paragraph=elements(doc,A,'p')[source.index];if(!paragraph)continue;
+    let props=children(paragraph,A,'pPr')[0];
+    if(!props){props=create(doc,A,'a:pPr');paragraph.insertBefore(props,paragraph.firstChild);}
+    // Scope typography to recognized introduction paragraphs, including unchanged
+    // text. Keep every other paragraph/run/shape property inherited from the template.
+    props.setAttribute('hangingPunct','1');props.setAttribute('eaLnBrk','1');pkg.mark(source.part);
+  }
+}
+
 export async function writeMaterial(materialReview,{month,targetName,now=new Date()}={}) {
   const template=materialReview?.template;
   if(!template||!['docx','pptx'].includes(template.kind))fail('请选择有效的 Word 或 PPTX 模板。');
@@ -473,7 +487,7 @@ export async function writeMaterial(materialReview,{month,targetName,now=new Dat
   const timestamp=new Date(now).toISOString().replace(/\.\d{3}Z$/,'Z');
   const entries=[...groups.values()].flatMap(g=>g.entries),hasComments=entries.some(e=>e.op.kind==='comment'),hasReplacements=entries.some(e=>e.op.kind==='replace');
   const nextId=kind==='docx'?await allocateWordIds(pkg):null;
-  if(kind==='pptx')await repairPptCommentAuthors(pkg);
+  if(kind==='pptx'){await repairPptCommentAuthors(pkg);await formatPptIntroductionPunctuation(pkg,materialReview);}
   const comments=kind==='docx'&&hasComments?await wordCommentPart(pkg):null;
   const pptState=kind==='pptx'&&hasComments?await createPptCommentState(pkg,AUTHOR):null;
   const results=[],commentIds=[];

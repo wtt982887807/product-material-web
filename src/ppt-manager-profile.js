@@ -9,6 +9,8 @@ const biographyIdentity=/学士|硕士|博士|本科|大学|毕业|学历|CFA|FR
 const biographyWords=/擅长|擅于|投资风格|投资理念|研究|投研|负责|深耕|精通|具备|具有|拥有|重视|注重|坚持|专注|从事|致力|追求|组合|风控|策略|风险|资产/;
 const boundary=/^(?:[一二三四五六七八九十\d]+[、.．\s]*)?(?:产品(?:要素|介绍|特色|亮点|信息)|风险(?:提示|揭示|等级)|重要提示|免责声明|公司(?:实力|介绍|简介)|投资团队|团队(?:介绍|组织|架构)|组织架构|荣誉奖项|获奖情况|历史业绩|业绩表现|数据来源|注[：:]|资料来源|备注[：:])/;
 const jobTitle=text=>{const s=trim(text);return s.length>0&&s.length<100&&/经理|总监|主管|负责人|分析师|研究员|首席/.test(s)&&!/[。；;，,\n]|^(?:现任|历任|曾任|曾就职|曾任职)/.test(s)&&!/(?:奖|产品|观点|表示|认为)/.test(s);};
+const positionEnd=/(?:经理(?:助理)?|总监(?:助理)?|主管|负责人|分析师|研究员|董事长|董事|总裁(?:助理)?|主任|首席(?:执行|投资|风险|财务|运营|技术)官|首席经济学家|首席策略师|首席)(?:[（(][^）)]*[）)])?$/;
+const captionTitle=text=>{const s=trim(text);return jobTitle(s)||s.length>0&&s.length<100&&positionEnd.test(s)&&!/[。；;\n]|^(?:现任|历任|曾任|曾就职|曾任职)/.test(s)&&!/(?:奖|产品|观点|表示|认为)/.test(s);};
 const genericTitle=/^(?:(?:拟任|拟聘)?(?:基金|投资)经理(?:简介)?[：:]?|(?:基金|投资)?经理简介)$/;
 const withoutBullets=text=>trim(text).replace(/^[\s•·●◆\uf0d8]+/,'');
 // Education/experience words alone do not identify a person. Collective
@@ -42,19 +44,19 @@ function findAnchor(p,names){
  for(const name of names){
   const at=raw.indexOf(name);if(at<0)continue;
   const before=withoutBullets(raw.slice(0,at)).replace(/[：:]$/,'').trim(),tail=raw.slice(at+name.length);
-  if(before&&!genericTitle.test(before)&&!jobTitle(before))continue;
+  if(before&&!genericTitle.test(before)&&!captionTitle(before))continue;
   const suffix=tail.match(/^[\s：:,，]*(?:(?:先生|女士)|[（(](?:配照片|附照片|照片|图片|续|续页|续完)[）)])?[\s：:,，]*/)?.[0]||'';
   const rest=tail.slice(suffix.length),start=at+name.length+suffix.length;
   if(/^(?:表示|认为|指出|荣获|获奖|获评|荣膺|负责本|管理本)/.test(rest))continue;
-  if(rest&&!biographyIdentity.test(rest)&&!jobTitle(rest))continue;
-  if(rest&&jobTitle(rest))return {p,name,known:true,start:raw.length,prefix:raw,rect:rectangle(owner(p))};
+  if(rest&&!biographyIdentity.test(rest)&&!captionTitle(rest))continue;
+  if(rest&&captionTitle(rest)&&!biographyIdentity.test(rest))return {p,name,known:true,start:raw.length,prefix:raw,rect:rectangle(owner(p))};
   return {p,name,known:true,start:rest?start:raw.length,prefix:rest?raw.slice(0,start):raw,rect:rectangle(owner(p))};
  }
  // An unknown person's caption is still a partition boundary. Otherwise a
  // nearby known manager could overwrite that person's education and career.
  const s=withoutBullets(raw);
  const namedTitle=s.match(/^(.{2,80}?(?:经理|总监|主管|负责人|研究员|分析师))[\s：:]+([\p{Script=Han}]{2,4})(?:先生|女士)?$/u)||s.match(/^([\p{Script=Han}]{2,4})[\s：:]+(.{2,80}?(?:经理|总监|主管|负责人|研究员|分析师))$/u);
- if(namedTitle){const name=jobTitle(namedTitle[1])?namedTitle[2]:namedTitle[1];return {p,name,known:false,start:raw.length,prefix:raw,rect:rectangle(owner(p))};}
+ if(namedTitle){const name=captionTitle(namedTitle[1])?namedTitle[2]:namedTitle[1];return {p,name,known:false,start:raw.length,prefix:raw,rect:rectangle(owner(p))};}
  const shortName=s.replace(/(?:先生|女士)$/,'').trim();
  if(/^[\p{Script=Han}]{2,4}$/u.test(shortName)&&!biographyIdentity.test(shortName)&&!biographyWords.test(shortName)&&!boundary.test(shortName)&&!/(?:简介|介绍|姓名|经理|团队|荣誉|学历|专业|经历|照片|观点|备注|投资|证券|金融|公司|收益)/.test(shortName))return {p,name:shortName,known:false,start:raw.length,prefix:raw,rect:rectangle(owner(p))};
  return null;
@@ -122,7 +124,7 @@ function pageRegions(paragraphs,names,inherited=null){
    if(r.entries.some(e=>e.p===p))continue;
    const other=byParagraph.get(p.id);if(other&&other.name!==r.name)continue;
    const stripped=other?p.text.replace(other.name,'').replace(/[（(](?:续|照片)[）)]/g,'').trim():trim(p.text);
-   if(!jobTitle(stripped)||genericTitle.test(stripped))continue;
+   if(!captionTitle(stripped)||genericTitle.test(stripped)&&(p===r.p||owner(p)!==owner(r.p)))continue;
    const rect=rectangle(owner(p)),target=nearest(rect,regions);if(target!==r||blockedBySection(rect,r,sectionHeads))continue;
    const same=owner(p)===owner(r.p),close=rect&&r.rect&&distance(rect,r.rect)<=Math.max(rect.h,r.rect.h)*3;
    if(same||close)r.captions.push(p);
@@ -186,29 +188,27 @@ function semanticAllocation(canonical,entries){
 }
 
 function currentTitle(biography){
- const clause=biography.match(/现任\s*([^。；;\n，,]+)/)?.[1]?.trim();if(!clause)return null;
+ const clause=biography.match(/现任\s*([^。；;\n]+)/)?.[1]?.trim();if(!clause)return null;
  // A caption omits the employer; the full current-employment sentence still
  // appears verbatim in the authoritative biography beside it.
  const title=clause.replace(/^.*?(?:有限责任公司|股份有限公司|有限公司|资管|公司)/,'').trim();
- return jobTitle(title)?title:null;
+ // Department lists and parenthetical department scopes may themselves use
+ // commas or enumeration marks. A split is valid only after a complete post,
+ // outside parentheses; the source's first post always determines the caption.
+ let depth=0;
+ for(let i=0;i<title.length;i++){
+  const char=title[i];if(char==='（'||char==='('){depth++;continue;}if(char==='）'||char===')'){depth=Math.max(0,depth-1);continue;}
+  if(depth||!/[、，,]/.test(char)&&!title.startsWith('兼',i))continue;
+  const candidate=title.slice(0,i).trim();if(positionEnd.test(candidate))return candidate;
+ }
+ return positionEnd.test(title)?title:null;
 }
 function captionAfter(p,region,title){
  const at=p.text.indexOf(region.name),leading=p.text.match(/^\s*/)?.[0]||'',trailing=p.text.match(/\s*$/)?.[0]||'';
- const oldTitle=(at<0?p.text:p.text.replace(region.name,'')).trim(),count=oldTitle.split(/、|兼任/).length;
- const supported=new Set();let department='';
- for(const role of title.split(/、|兼任/).map(trim)){
-  supported.add(compact(role));
-  const match=role.match(/^(.*?)(副?总经理(?:助理)?|(?:高级|首席)?投资经理|基金经理|投资总监|研究员|负责人|主管|分析师|董事长|总裁)$/);
-  if(match){if(match[1])department=match[1];supported.add(compact(department+match[2]));supported.add(compact(match[2]));}
- }
- // A template may deliberately name a secondary post. If that abbreviated
- // post still appears in the source, do not promote it to the first role.
- if(oldTitle.split(/、|兼任/).every(role=>supported.has(compact(role))))return p.text;
- title=title.split(/、|兼任/).slice(0,count).join('、');
  if(at<0)return leading+title+trailing;
  const before=p.text.slice(0,at),after=p.text.slice(at+region.name.length);
- if(jobTitle(before.trim()))return leading+title+(before.match(/\s*$/)?.[0]||' ')+region.name+after;
- if(jobTitle(after.trim()))return before+region.name+(after.match(/^\s*/)?.[0]||' ')+title+trailing;
+ if(captionTitle(before.trim()))return leading+title+(before.match(/\s*$/)?.[0]||' ')+region.name+after;
+ if(captionTitle(after.trim()))return before+region.name+(after.match(/^\s*/)?.[0]||' ')+title+trailing;
  return p.text;
 }
 function applyRegion(task,m,profile,region,records,productionDate){
