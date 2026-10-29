@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import JSZip from 'jszip';
 import * as naming from '../src/naming.js';
+import * as productionDates from '../src/production-date.js';
 import * as reviewEngine from '../src/review-engine.js';
 import * as companyDefaults from '../src/default-company-profile.js';
 import {calendarSupplementText,calendarOpeningRange} from '../src/calendar-import.js';
@@ -56,7 +57,7 @@ const record = value => ({...value, bytes: new Uint8Array([1])});
 // Execute the real app event handlers with small DOM/import boundary fakes.
 // No browser, storage, Office files or network is used; naming and supplements
 // retain their production implementations.
-function createApp({store, storeFactory, parseCompanyProfile, prepareCompanyTemplate, onAnalyze, onWrite, onDownload, readWordTemplate, readWordContract, taskFactory, calendar} = {}) {
+function createApp({store, storeFactory, parseCompanyProfile, prepareCompanyTemplate, managerStore, parseManagerProfile, onApplyManager, clock=Date, onAnalyze, onWrite, onDownload, readWordTemplate, readWordContract, taskFactory, calendar} = {}) {
   const elements = new Map(ids.map(id => [id, new Element()]));
   const document = {
     getElementById(id) { assert.ok(elements.has(id), `Missing page element: ${id}`); return elements.get(id); },
@@ -65,6 +66,10 @@ function createApp({store, storeFactory, parseCompanyProfile, prepareCompanyTemp
   };
   const saved = store || {load: async () => null, save: async () => {}, clear: async () => {}};
   const modules = {
+    './default-manager-profile.js': {DEFAULT_MANAGER_PROFILE:{schemaVersion:1,name:'内置经理.xlsx',sha256:'d'.repeat(64),records:[]},DEFAULT_MANAGER_TEMPLATE:{name:'内置经理.xlsx',url:'assets/manager-introductions.xlsx'}},
+    './manager-store.js': {createManagerStore:()=>managerStore||{load:async()=>null,save:async()=>{},clear:async()=>{}}},
+    './manager-data.js': {parseManagerProfile:parseManagerProfile|| (async({name})=>({schemaVersion:1,name,sha256:'e'.repeat(64),records:[]}))},
+    './manager-profile.js': {applyManagerProfile(task,current,options){onApplyManager?.(task,current,options);task.managerProfile={name:current.name,productionDate:options.productionDate};return task;}},
     './default-company-profile.js': {loadDefaultCompanyProfile: variant => profile(variant==='ccb'?'builtin-ccb.docx':'builtin-company.docx', 'c'), getDefaultCompanyTemplate:variant=>({name:variant==='ccb'?'builtin-ccb.docx':'builtin-company.docx',url:'https://example.test/'+(variant||'general')+'.docx'}),isSupersededCompanyProfile: companyDefaults.isSupersededCompanyProfile},
     './profile-store.js': {createProfileStore: options => storeFactory?storeFactory(options):saved},
     './company-template.js': {prepareCompanyTemplate:prepareCompanyTemplate|| (async file=>file)},
@@ -103,16 +108,16 @@ function createApp({store, storeFactory, parseCompanyProfile, prepareCompanyTemp
   };
   let urlNumber = 0;const blobs=new Map();
   const context = vm.createContext({
-    ...naming, document, Date, Intl, Uint8Array, Blob, JSZip,
+    ...naming, ...productionDates, document, Date:clock, Intl, Uint8Array, Blob, JSZip,
     URL: {createObjectURL: blob => {const url=`blob:test-${++urlNumber}`;blobs.set(url,blob);return url;}, revokeObjectURL() {}},
     requestAnimationFrame: callback => queueMicrotask(callback),
     window: {scrollTo() {}},
     importModule: async path => { const modulePath=path.split('?')[0]; assert.ok(modules[modulePath], `Unexpected app import: ${path}`); return modules[modulePath]; },
   });
   const source = appSource
-    .replace(/^import[^\n]+\n/, '')
+    .replace(/^import[^\n]+\n/gm, '')
     .replace(/\bimport\(/g, 'importModule(')
-    .replace(/restoreCompany\(\);(?=\s*$)/, 'globalThis.appReady=restoreCompany();');
+    .replace(/const appReady=Promise.all\(\[restoreCompany\(\),restoreManager\(\)\]\);/, 'globalThis.appReady=Promise.all([restoreCompany(),restoreManager()]);');
   vm.runInContext(source, context, {filename: 'src/app.js'});
   assert.ok(context.appReady, 'App startup still exposes its initial restore boundary');
   return {elements, state: vm.runInContext('state', context), ready: context.appReady,blobs,renderReview:()=>vm.runInContext('renderReview()',context)};
@@ -129,6 +134,63 @@ function appendSupplementFacts(app){
  app.renderReview();
 }
 const buttonIn=(element,text)=>descendants(element).find(n=>n.tagName==='button'&&n.textContent===text);
+
+test('manager Excel can be uploaded, downloaded and restored independently of company templates',async()=>{
+ const saved=[];const app=createApp({managerStore:{load:async()=>null,save:async r=>saved.push(r),clear:async()=>{}}});await app.ready;
+ const companyBefore=app.state.company;
+ assert.ok(app.elements.get('manager-input'),'Manager upload is available');
+ await app.elements.get('manager-input').dispatch('change',{target:{files:[file('经理最新版.xlsx',7)]}});
+ assert.equal(app.state.manager.name,'经理最新版.xlsx');assert.equal(saved.length,1);
+ assert.deepEqual([...saved[0].bytes],[7]);assert.equal(app.state.company,companyBefore);
+ const link=app.elements.get('manager-download');assert.equal(link.download,'经理最新版.xlsx');
+ assert.deepEqual([...new Uint8Array(await app.blobs.get(link.href).arrayBuffer())],[7]);
+ const reopened=createApp({managerStore:{load:async()=>saved[0]}});await reopened.ready;
+ assert.equal(reopened.state.manager.name,'经理最新版.xlsx');assert.equal(reopened.elements.get('manager-download').download,'经理最新版.xlsx');
+ await app.elements.get('manager-clear').click();assert.equal(app.state.manager.name,'内置经理.xlsx');
+ assert.equal(app.elements.get('manager-download').href,'assets/manager-introductions.xlsx');
+});
+
+test('production date recalculates manager profiles while preserving confirmed product values',async()=>{
+ const dates=[];const app=createApp({onApplyManager:(task,profile,options)=>dates.push(options.productionDate)});await app.ready;await chooseMaterials(app);
+ const input=app.elements.get('month-value');input.value='2026-10-29';await input.dispatch('change');await app.elements.get('analyze-button').click();
+ const task=app.state.task;task.facts[0].value='R2';task.facts[0].userConfirmed=true;
+ await app.elements.get('generate-button').click();assert.ok(app.elements.get('download-list').children.length);
+ input.value='2026-11-07';await input.dispatch('change');
+ assert.equal(app.state.task,task);assert.equal(task.facts[0].value,'R2');assert.equal(task.facts[0].userConfirmed,true);
+ assert.equal(task.productionDate,'2026-11-07');assert.equal(task.month,'202611');
+ assert.deepEqual(dates,['2026-10-29','2026-11-07']);assert.equal(app.elements.get('download-list').children.length,0);
+});
+
+test('a fresh page and reset use today, but an open task does not silently change at midnight',async()=>{
+ let now='2026-10-29T15:59:00Z';class Clock extends Date{constructor(...args){super(...(args.length?args:[now]));}}
+ const app=createApp({clock:Clock});await app.ready;assert.equal(app.state.productionDate,'2026-10-29');
+ now='2026-10-29T16:01:00Z';await chooseMaterials(app);await app.elements.get('analyze-button').click();
+ assert.equal(app.state.task.productionDate,'2026-10-29');
+ const reopened=createApp({clock:Clock});await reopened.ready;assert.equal(reopened.state.productionDate,'2026-10-30');
+ await app.elements.get('month-reset').click();assert.equal(app.state.productionDate,'2026-10-30');
+ assert.equal(app.state.task.productionDate,'2026-10-30');
+});
+
+test('manager drag upload and failed replacement retain the usable current template without a blocking error',async()=>{
+ const app=createApp({parseManagerProfile:async({name})=>{if(name==='bad.xlsx')throw new Error('bad zip');return{schemaVersion:1,name,sha256:'e'.repeat(64),records:[]};}});await app.ready;
+ await app.elements.get('manager-drop').dispatch('drop',{dataTransfer:{files:[file('拖入经理.xlsx')]}});
+ assert.equal(app.state.manager.name,'拖入经理.xlsx');const current=app.state.manager;
+ await app.elements.get('manager-input').dispatch('change',{target:{files:[file('bad.xlsx')]}});
+ assert.equal(app.state.manager,current);assert.equal(app.elements.get('manager-download').download,'拖入经理.xlsx');
+ assert.equal(app.elements.get('error-panel').hidden,true);
+});
+
+test('an invalid manager cache falls back to builtin and leaves a working clear action',async()=>{
+ let cleared=0;const app=createApp({managerStore:{load:async()=>({name:'损坏缓存.xlsx',sha256:'0'.repeat(64),bytes:new Uint8Array([1])}),clear:async()=>{cleared++;}}});await app.ready;
+ assert.equal(app.state.manager.name,'内置经理.xlsx');assert.equal(app.elements.get('manager-clear').hidden,false);
+ await app.elements.get('manager-clear').click();assert.equal(cleared,1);assert.equal(app.elements.get('manager-clear').hidden,true);
+});
+
+test('clearing the production date cannot export under an unintended date',async()=>{
+ const app=createApp();await app.ready;await chooseMaterials(app);await app.elements.get('analyze-button').click();const original=app.state.task.productionDate;
+ app.elements.get('month-value').value='';await app.elements.get('month-value').dispatch('change');assert.equal(app.state.task.productionDate,original);assert.equal(app.elements.get('generate-button').disabled,true);
+ await app.elements.get('month-reset').click();assert.equal(app.elements.get('generate-button').disabled,false);
+});
 
 function narrativeTask(contract,templates,options){
  const rows=[['产品名称','晨星稳健3号集合资产管理计划'],['投资范围','本计划投资债券、货币市场工具。'],['投资范围','本计划可投资公募基金。'],['投资比例','固定收益资产占80%以上。'],['投资比例','权益类资产不超过20%。'],['A类份额投资范围','本份额投资债券。'],['B类份额投资范围','本份额投资基金。']];
@@ -623,7 +685,7 @@ test('delivery previews use contract fallback and distinguish colliding template
  const material=app.state.task.materials[0];
  material.template.name='【一页通202608】旧产品2号X期.docx';
  app.state.task.materials.push({...material,template:{...material.template,name:'【一页通202608】未知产品7号.docx'}});
- app.elements.get('month-value').value='2026-10';
+ app.elements.get('month-value').value='2026-10-29';
  await app.elements.get('month-value').dispatch('change');
  const names=descendants(app.elements.get('delivery-list')).filter(n=>n.tagName==='strong').map(n=>n.textContent);
  assert.deepEqual(names,['【一页通202610】示例稳健1号.docx','【一页通202610】示例稳健1号（2）.docx']);
@@ -634,7 +696,7 @@ test('manual month survives analysis, user supplement, and export; later edits u
   const app = createApp({onAnalyze: options => analyzed.push(options.month), onWrite: task => written.push(task.month)});
   await app.ready;
   const month = app.elements.get('month-value');
-  month.value = '2032-04';
+  month.value = '2032-04-15';
   await month.dispatch('change');
   await chooseMaterials(app);
   await app.elements.get('analyze-button').click();
@@ -650,7 +712,7 @@ test('manual month survives analysis, user supplement, and export; later edits u
   await app.elements.get('generate-button').click();
   assert.deepEqual(written, ['203204']);
   assert.deepEqual(app.elements.get('download-list').children.filter(node => node.tagName === 'a').map(node => node.download), ['示例稳健1号_203204.zip', '示例_203204.docx']);
-  month.value = '2032-05';
+  month.value = '2032-05-15';
   await month.dispatch('change');
   assert.equal(app.elements.get('download-list').children.length, 0);
   await app.elements.get('generate-button').click();
@@ -776,7 +838,7 @@ test('restoring version caches passes the selected variant and rejects an invali
 
 test('switching company version invalidates the prior generated task while retaining inputs and production month',async()=>{
  const app=createApp();await app.ready;await chooseMaterials(app);
- app.elements.get('month-value').value='2027-03';await app.elements.get('month-value').dispatch('change');
+ app.elements.get('month-value').value='2027-03-15';await app.elements.get('month-value').dispatch('change');
  await app.elements.get('analyze-button').click();await app.elements.get('generate-button').click();assert.ok(app.state.urls.length);
  const contract=app.state.contract,templates=app.state.templates;
  app.elements.get('company-variant').value='ccb';await app.elements.get('company-variant').dispatch('change');
@@ -857,7 +919,7 @@ test('automatic download denial leaves every direct download link usable and nev
   const status=app.elements.get('generation-status');assert.ok(status);
   assert.match(status.textContent,/已生成.*点击/);
   assert.equal(app.elements.get('download-list').scrolledIntoView,true);
-  app.elements.get('month-value').value='2030-02';await app.elements.get('month-value').dispatch('change');
+  app.elements.get('month-value').value='2030-02-15';await app.elements.get('month-value').dispatch('change');
   assert.equal(status.hidden,true,'Stale download confirmation disappears when output naming changes');
 });
 
