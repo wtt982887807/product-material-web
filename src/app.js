@@ -1,4 +1,4 @@
-import {currentMonth,deliveryName,materialDeliveryName,uniqueDeliveryNames} from './naming.js?v=20261029-ppt-profiles';
+import {currentMonth,deliveryName,materialDeliveryName,uniqueDeliveryNames} from './naming.js?v=20261029-punctuation-title';
 import {currentProductionDate,resolveProductionDate,productionMonth} from './production-date.js?v=20261029-manager';
 
 const $=id=>document.getElementById(id);
@@ -149,7 +149,7 @@ $('analyze-button').onclick=async()=>{
  if(state.busy||!state.companyReady||!state.managerReady||(!state.introductionsOnly&&!state.contract)||!state.templates.length)return;try{updateMonth();}catch(error){showError(error);return;}const run=++state.run;invalidate();setBusy(true);progress(state.introductionsOnly?'正在准备介绍更新':'正在读取合同',state.introductionsOnly?'使用当前保存的公司资料和经理 Excel。':'建立本次合同索引，保留文字出处。');await nextPaint();
  try{
   if(!state.manager||!state.applyManagerProfile){await restoreManager();if(!state.manager||!state.applyManagerProfile)throw new Error('经理介绍功能暂未加载完成，请刷新网页后重新核对。');}
-  const [{readWordContract,readWordTemplate},reviewApi,profileApi]=await Promise.all([import('./word-input.js?v=20261027-custom-investment'),state.introductionsOnly?Promise.resolve({}):import('./review-engine.js?v=20261029-risk-custom'),import('./introduction-task.js?v=20261029-ppt-profiles')]);state.reviewApi=reviewApi;state.finishProfiles=profileApi.finalizeIntroductionTask;
+  const [{readWordContract,readWordTemplate},reviewApi,profileApi]=await Promise.all([import('./word-input.js?v=20261027-custom-investment'),state.introductionsOnly?Promise.resolve({}):import('./review-engine.js?v=20261029-risk-custom'),import('./introduction-task.js?v=20261029-punctuation-title')]);state.reviewApi=reviewApi;state.finishProfiles=profileApi.finalizeIntroductionTask;
   const contract=state.introductionsOnly?null:await readWordContract({name:state.contract.name,bytes:new Uint8Array(await state.contract.arrayBuffer())},{onProgress:progress});
   const templates=[],inputIssues=[],seen=new Set();
   for(const [i,file]of state.templates.entries()){
@@ -165,8 +165,8 @@ $('analyze-button').onclick=async()=>{
   if(!templates.length)throw new Error('没有可更新的模板。'+inputIssues.map(i=>`${i.sourceName}：${i.message}`).join('\n'));
   progress(state.introductionsOnly?'正在定位介绍内容':'正在统一核对产品要素',state.introductionsOnly?'分别匹配公司主体及每位经理，保留模板产品名称。':'合并共同需求，查找合同依据，再定位各物料的改动。');await nextPaint();
   const task=state.introductionsOnly?profileApi.createIntroductionTask(templates,{now:state.started,month:state.month,productionDate:state.productionDate}):await reviewApi.analyzeMaterials(contract,templates,{now:state.started,month:state.month});task.now=state.started;task.productionDate=state.productionDate;task.inputIssues=[...(task.inputIssues||[]),...inputIssues];
-  if(state.company){progress('正在核对公司介绍',companyVersionLabel()+' · '+state.company.name);await nextPaint();const [{applyCompanyProfile},{applyPptCompanyProfile}]=await Promise.all([import('./company-profile.js?v=20261029-company-versions'),import('./ppt-company-profile.js?v=20261029-ppt-profiles')]);await applyCompanyProfile(task,state.company);applyPptCompanyProfile(task,state.company);}
-  if(state.manager&&state.applyManagerProfile){progress('正在更新经理介绍',state.manager.name);await nextPaint();const {applyPptManagerProfile}=await import('./ppt-manager-profile.js?v=20261029-ppt-profiles');state.applyPptManagerProfile=applyPptManagerProfile;state.applyManagerProfile(task,state.manager,{productionDate:state.productionDate});applyPptManagerProfile(task,state.manager,{productionDate:state.productionDate});}
+  if(state.company){progress('正在核对公司介绍',companyVersionLabel()+' · '+state.company.name);await nextPaint();const [{applyCompanyProfile},{applyPptCompanyProfile}]=await Promise.all([import('./company-profile.js?v=20261029-company-versions'),import('./ppt-company-profile.js?v=20261029-punctuation-title')]);await applyCompanyProfile(task,state.company);applyPptCompanyProfile(task,state.company);}
+  if(state.manager&&state.applyManagerProfile){progress('正在更新经理介绍',state.manager.name);await nextPaint();const {applyPptManagerProfile}=await import('./ppt-manager-profile.js?v=20261029-punctuation-title');state.applyPptManagerProfile=applyPptManagerProfile;state.applyManagerProfile(task,state.manager,{productionDate:state.productionDate});applyPptManagerProfile(task,state.manager,{productionDate:state.productionDate});}
   profileApi.finalizeIntroductionTask(task);
   if(run!==state.run)return;
   state.task=task;const feeGroups=groups().filter(g=>g.kind==='performance');if(feeGroups.length===1&&groupFacts(feeGroups[0]).some(f=>f.key==='performance_R2'))$('performance-mode').value='tiered';syncPerformanceMode();renderReview();$('upload-section').hidden=true;$('review-section').hidden=false;changeStep('review');
@@ -445,7 +445,7 @@ function reviewText(task,result){
 async function generateFiles({autoDownload=true}={}){
  if(!state.task||state.busy||!state.monthValid)return;setBusy(true);$('error-panel').hidden=true;clearDownloads();generationStatus('正在生成物料，请稍候…');$('generate-button').textContent='正在生成…';await nextPaint();
  try{
-  const {writeTask}=await import('./office-writer.js?v=20261029-ppt-profiles');const result=await writeTask(state.task);generationStatus(`已完成 ${result.files.length} 份物料，正在准备下载包…`);const zip=new globalThis.JSZip();for(const file of result.files)zip.file(file.name,file.bytes);zip.file('审阅清单.txt','\uFEFF'+reviewText(state.task,result));const bundle=await zip.generateAsync({type:'uint8array',compression:'DEFLATE'});
+  const {writeTask}=await import('./office-writer.js?v=20261029-punctuation-title');const result=await writeTask(state.task);generationStatus(`已完成 ${result.files.length} 份物料，正在准备下载包…`);const zip=new globalThis.JSZip();for(const file of result.files)zip.file(file.name,file.bytes);zip.file('审阅清单.txt','\uFEFF'+reviewText(state.task,result));const bundle=await zip.generateAsync({type:'uint8array',compression:'DEFLATE'});
   const issues=deliveryIssues(state.task,result),box=$('download-list');box.append(el('p','download-success',`已生成 ${result.files.length} 份物料，可下载审阅。`));const bundleLink=downloadLink(bundle,'application/zip',`${state.task.target.shortName||'产品物料'}_${state.task.month}.zip`,box);for(const file of result.files)downloadLink(file.bytes,file.mime,file.name,box);changeStep('download');
   for(const note of deliveryNotes(state.task,result))box.append(el('p','delivery-note',note));
   generationStatus((issues.length?`已生成 ${result.files.length} 份，${issues.length} 份未生成，原因见下方。`:'已生成。')+(autoDownload?'若未自动开始下载，请点击下方下载包或单个文件。':'请直接点击下方下载包或单个文件。'),issues.length?'warning':'success');box.scrollIntoView({block:'nearest'});

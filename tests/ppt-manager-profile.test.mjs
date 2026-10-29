@@ -61,9 +61,45 @@ test('an obsolete existing primary-post caption changes only the stale words and
  assert.equal(paragraphText(m,caption.id),'固定收益投资部（私募）总经理');assert.deepEqual(ops.map(o=>({before:o.before,after:o.after})),[{before:'上海',after:'私募'}]);assert.ok(m.fields[0].after.includes('总经理、投资经理'));assertSourceComplete(m,m.fields[0]);
 });
 
-test('an existing abbreviated secondary post stays unchanged when the source still supports it',async()=>{
+test('an existing secondary-post caption is changed to the first current post while the body keeps every post',async()=>{
  const data=profile([{biography:'金融博士。\n现任甲公司固定收益投资部（私募）总经理、投资经理。\n擅长量化投资。'}]),t=await fixture(shape('photo-caption',['固定收益投资部（私募）投资经理','张三'],[20,500,270,70])+body('body',350));
- const x=applyPptManagerProfile(task(t),data),m=x.materials[0];assert.ok(!m.operations.some(o=>t.paragraphs.find(p=>p.id===o.paragraphId).shapeId==='photo-caption'));assert.ok(m.fields[0].after.includes('总经理、投资经理'));assertSourceComplete(m,m.fields[0]);
+ const x=applyPptManagerProfile(task(t),data),m=x.materials[0],caption=t.paragraphs.find(p=>p.text==='固定收益投资部（私募）投资经理');assert.equal(paragraphText(m,caption.id),'固定收益投资部（私募）总经理');assert.ok(m.fields[0].after.includes('总经理、投资经理'));assertSourceComplete(m,m.fields[0]);assert.ok(m.operations.filter(o=>o.paragraphId===caption.id).every(o=>!o.profileParagraphs&&!o.profileDeleteParagraph));
+});
+
+test('multiple existing caption posts collapse to the first complete source post across common separators',async()=>{
+ const cases=[
+  ['固定收益投资部总经理、投资经理','固定收益投资部总经理'],
+  ['固定收益投资部总经理，投资经理','固定收益投资部总经理'],
+  ['固定收益投资部总经理,投资经理','固定收益投资部总经理'],
+  ['固定收益投资部总经理兼任投资经理','固定收益投资部总经理'],
+  ['固定收益投资部总经理兼投资经理','固定收益投资部总经理'],
+  ['固定收益部、权益投资部总经理、投资经理','固定收益部、权益投资部总经理'],
+  ['固定收益部/权益部总经理、投资经理','固定收益部/权益部总经理'],
+  ['固定收益部，权益投资部总经理、投资经理','固定收益部，权益投资部总经理'],
+  ['固定收益部（公募、私募）总经理、投资经理','固定收益部（公募、私募）总经理'],
+  ['固定收益部总经理助理、投资经理','固定收益部总经理助理'],
+  ['固定收益部总经理（主持工作）、投资经理','固定收益部总经理（主持工作）'],
+  ['固定收益部总经理，负责债券投资研究','固定收益部总经理'],
+ ];
+ for(const [employment,expected]of cases){
+  const biography='金融博士。\n现任甲公司'+employment+'。\n擅长量化投资。',t=await fixture(shape('photo-caption',['旧固定收益投资部总经理、投资经理','张三'],[20,500,270,70])+body('body',350)),x=applyPptManagerProfile(task(t),profile([{biography}])),m=x.materials[0],caption=t.paragraphs.find(p=>p.text==='旧固定收益投资部总经理、投资经理');
+  assert.equal(paragraphText(m,caption.id),expected,employment);assert.equal(x.facts[0].value,biography);assertSourceComplete(m,m.fields[0]);assert.ok(m.operations.every(o=>!o.profileParagraphs&&!o.profileDeleteParagraph));
+ }
+});
+
+test('comma-separated original caption titles are still updated in place to one first post',async()=>{
+ const data=profile([{biography:'金融博士。\n现任甲公司固定收益投资部总经理、投资经理。'}]),t=await fixture(shape('photo-caption',['固定收益投资部总经理，投资经理','张三'],[20,500,270,70])+body('body',350)),x=applyPptManagerProfile(task(t),data),m=x.materials[0],caption=t.paragraphs.find(p=>p.text==='固定收益投资部总经理，投资经理');
+ assert.equal(paragraphText(m,caption.id),'固定收益投资部总经理');assertSourceComplete(m,m.fields[0]);
+});
+
+test('a generic job line beside the photo name counts as an existing job while a slide name header stays intact',async()=>{
+ const data=profile([{biography:'金融博士。\n现任甲公司固定收益投资部总经理、投资经理。'}]),t=await fixture(shape('photo-caption',['投资经理','张三'],[20,500,270,70])+body('body',350),name('header',100,'投资经理：张三')+body('body',100)),x=applyPptManagerProfile(task(t),data),m=x.materials[0];
+ assert.equal(paragraphText(m,t.paragraphs.find(p=>p.text==='投资经理').id),'固定收益投资部总经理');assert.equal(paragraphText(m,t.paragraphs.find(p=>p.text==='投资经理：张三').id),'投资经理：张三');
+});
+
+test('an inline name followed by education and current employment without a full stop remains a biography',async()=>{
+ const t=await fixture(shape('inline',['张三：金融硕士，现任旧公司投资经理'])),x=applyPptManagerProfile(task(t),source),m=x.materials[0];
+ assert.deepEqual(m.profilePages.manager,[1]);assert.equal(x.facts.length,1);assert.equal(x.facts[0].value,source.records[0].biography);assertSourceComplete(m,m.fields[0]);assert.ok(paragraphText(m,t.paragraphs[0].id).startsWith('张三：'));assert.ok(m.operations.every(o=>o.start>=3&&!o.profileParagraphs&&!o.profileDeleteParagraph));
 });
 
 test('two managers on one slide use shape geometry, despite interleaved XML order',async()=>{
