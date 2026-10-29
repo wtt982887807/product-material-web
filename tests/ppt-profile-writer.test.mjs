@@ -38,10 +38,30 @@ function review(template,operations=[],extra={}){
 }
 const options={month:'202610',targetName:'新产品',now:new Date('2026-10-29T00:00:00Z')};
 async function output(material,opts=options){const file=await writeMaterial(material,opts),zip=await JSZip.loadAsync(file.bytes);return{file,zip,doc:parseXml(await zip.file('ppt/slides/slide1.xml').async('string'))};}
+function introductionProperties(p){const props=children(p,A,'pPr')[0].cloneNode(true);props.setAttribute('hangingPunct','1');props.setAttribute('eaLnBrk','1');return serializeXml(props);}
+
+test('PPT introductions allow hanging punctuation and Chinese line breaking without changing unrelated paragraphs',async()=>{
+ const t=await fixture(),p=t.paragraphs[0],oldUnrelated=serializeXml(t.paragraphs[1].node);
+ const o=await output(review(t,[operation(p,'公司：新公司。')])),ps=elements(o.doc,A,'p'),props=children(ps[0],A,'pPr')[0];
+ assert.equal(props.getAttribute('hangingPunct'),'1');assert.equal(props.getAttribute('eaLnBrk'),'1');
+ assert.equal(serializeXml(ps[1]),oldUnrelated);
+ assert.equal(props.getAttribute('algn'),'just');assert.equal(props.getAttribute('marL'),'120');
+ assert.equal(serializeXml(children(props,A,'lnSpc')[0]),serializeXml(children(children(p.node,A,'pPr')[0],A,'lnSpc')[0]));
+});
+
+test('matched unchanged introductions override disabled punctuation flags and add missing pPr locally',async()=>{
+ const disabled=paragraph('经理原简介。').replace('algn="just"','algn="just" hangingPunct="0" eaLnBrk="0"');
+ const t=await fixture([shape(1,disabled+`<a:p>${run('公司原简介。')}</a:p>`)+shape(2,paragraph('未识别的团队正文。'))]);
+ const m=review(t,[],{fields:[{source:'manager',paragraphIds:[t.paragraphs[0].id]},{source:'company',paragraphIds:[t.paragraphs[1].id]}]});
+ const o=await output(m),ps=elements(o.doc,A,'p');
+ for(const p of ps.slice(0,2)){const props=children(p,A,'pPr')[0];assert.equal(props?.getAttribute('hangingPunct'),'1');assert.equal(props?.getAttribute('eaLnBrk'),'1');assert.equal(p.firstChild,props);}
+ assert.equal(serializeXml(ps[2]),serializeXml(t.paragraphs[2].node));
+ assert.deepEqual(ps.map(p=>textOf(p,'pptx')),t.paragraphs.map(p=>p.text));assert.equal(o.file.report.operations.length,0);
+});
 
 test('PPT profile multiline replacements create native paragraphs with inherited style and preserve photos and relationships',async()=>{
  const t=await fixture(),before=t.bytes.slice(),p=t.paragraphs[0],last=t.paragraphs[2];
- const oldPhoto=serializeXml(elements(t.parts.get(p.part),P,'pic')[0]),oldShape=serializeXml(elements(t.parts.get(p.part),P,'spPr')[0]),oldProperties=serializeXml(children(p.node,A,'pPr')[0]);
+ const oldPhoto=serializeXml(elements(t.parts.get(p.part),P,'pic')[0]),oldShape=serializeXml(elements(t.parts.get(p.part),P,'spPr')[0]),oldProperties=introductionProperties(p.node);
  const o=await output(review(t,[operation(p,'公司：新公司。\n公司：完整新介绍。'),operation(t.paragraphs[1],'','company',{profileDeleteParagraph:true}),operation(last,'张三：高级投资经理。','manager')]));
  assert.deepEqual(elements(o.doc,A,'p').map(p=>textOf(p,'pptx')),['公司：新公司。','公司：完整新介绍。','张三：高级投资经理。']);
  assert.equal(elements(o.doc,A,'br').length,0);assert.ok(elements(o.doc,A,'t').every(n=>!n.textContent.includes('\n')));
@@ -70,7 +90,7 @@ test('explicit profile paragraph deletion removes empty and obsolete paragraphs 
  const ops=[operation(t.paragraphs[1],'','company',{profileDeleteParagraph:true}),operation(t.paragraphs[2],'','company',{profileDeleteParagraph:true}),operation(t.paragraphs[3],'','manager',{profileDeleteParagraph:true})];
  const o=await output(review(t,ops)),bodies=elements(o.doc,P,'txBody');
  assert.deepEqual(bodies.map(b=>children(b,A,'p').length),[1,1]);assert.deepEqual(bodies.map(b=>children(b,A,'p').map(p=>textOf(p,'pptx'))),[['保留。'],['']]);
- assert.equal(serializeXml(children(children(bodies[1],A,'p')[0],A,'pPr')[0]),serializeXml(children(t.paragraphs[3].node,A,'pPr')[0]));
+ assert.equal(serializeXml(children(children(bodies[1],A,'p')[0],A,'pPr')[0]),introductionProperties(t.paragraphs[3].node));
 });
 
 test('an unmarked empty replacement keeps its original paragraph instead of deleting layout',async()=>{
@@ -116,8 +136,8 @@ test('a profile whole paragraph operation cannot mix with another operation on t
  await assert.rejects(writeMaterial(review(t,[op,comment]),options),/同段|混用|介绍/);
 });
 
-test('PPT profile span differences preserve untouched runs and paragraph formatting byte-for-byte',async()=>{
- const t=await fixture([shape(1,paragraph('',run('14年证券从业经验。',true)+run('现任投资经理。')+run('说明：保持原有格式。',true)))]),p=t.paragraphs[0],unchanged=serializeXml(children(p.node,A,'r')[2]),props=serializeXml(children(p.node,A,'pPr')[0]);
+test('PPT profile span differences preserve untouched runs and paragraph formatting except requested punctuation flags',async()=>{
+ const t=await fixture([shape(1,paragraph('',run('14年证券从业经验。',true)+run('现任投资经理。')+run('说明：保持原有格式。',true)))]),p=t.paragraphs[0],unchanged=serializeXml(children(p.node,A,'r')[2]),props=introductionProperties(p.node);
  const ops=[operation(p,'15','manager',{id:'years',start:0,before:'14'}),operation(p,'高级','manager',{id:'insert-title',start:p.text.indexOf('投资经理'),before:''})];
  const o=await output(review(t,ops)),after=elements(o.doc,A,'p')[0];
  assert.equal(textOf(after,'pptx'),'15年证券从业经验。现任高级投资经理。说明：保持原有格式。');
