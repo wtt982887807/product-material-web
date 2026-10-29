@@ -5,6 +5,8 @@ web-private/
 .superpowers/
 *.doc
 *.docx
+!assets/company-introduction-general.docx
+!assets/company-introduction-ccb.docx
 *.pptx
 *.pdf
 *.xlsx
