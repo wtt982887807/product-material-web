@@ -1,4 +1,4 @@
-import {currentMonth,deliveryName,uniqueDeliveryNames} from './naming.js?v=20261026-drop';
+import {currentMonth,deliveryName,materialDeliveryName,uniqueDeliveryNames} from './naming.js?v=20261029-ppt-profiles';
 import {currentProductionDate,resolveProductionDate,productionMonth} from './production-date.js?v=20261029-manager';
 
 const $=id=>document.getElementById(id);
@@ -8,14 +8,15 @@ const state={contract:null,templates:[],task:null,filter:'focus',busy:false,urls
 const el=(tag,className,text)=>{const n=document.createElement(tag);if(className)n.className=className;if(text!==undefined)n.textContent=text;return n;};
 const readableSize=bytes=>bytes>=1048576?(bytes/1048576).toFixed(1)+' MB':Math.max(1,Math.round(bytes/1024))+' KB';
 const nextPaint=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+state.introductionsOnly=false;state.applyPptManagerProfile=null;state.finishProfiles=null;
 function showError(error){$('error-message').textContent=error?.message||String(error);$('error-panel').hidden=false;}
 function clearDownloads(){for(const url of state.urls)URL.revokeObjectURL(url);state.urls=[];$('download-list').replaceChildren();$('generation-status').hidden=true;$('generation-status').textContent='';}
 function changeStep(name){for(const key of ['upload','review','download']){$('step-'+key).classList.toggle('active',key===name);$('step-'+key).classList.toggle('done',name==='download'&&key!=='download'||name==='review'&&key==='upload');}}
 function updateMonth(reset=false){state.started=new Date();if(reset){state.manualDate=undefined;state.productionDate=currentProductionDate(state.started);}state.productionDate=resolveProductionDate({manualValue:state.manualDate??state.productionDate,now:state.started});state.month=productionMonth(state.productionDate);state.monthValid=true;$('month-value').value=state.productionDate;const [year,month,day]=state.productionDate.split('-');$('production-date-display').textContent=`${year}年${Number(month)}月${Number(day)}日`;}
-function changeMonth(reset=false){
+async function changeMonth(reset=false){
  if(state.busy)return;
  clearDownloads();
- try{if(!reset&&!$('month-value').value)throw new Error('请选择完整的制作日期。');state.manualDate=reset?undefined:$('month-value').value;updateMonth(reset);$('error-panel').hidden=true;if(state.task){state.task.month=state.month;state.task.productionDate=state.productionDate;if(state.manager&&state.applyManagerProfile)state.applyManagerProfile(state.task,state.manager,{productionDate:state.productionDate});clearDownloads();changeStep('review');renderReview();}}
+ try{if(!reset&&!$('month-value').value)throw new Error('请选择完整的制作日期。');state.manualDate=reset?undefined:$('month-value').value;updateMonth(reset);$('error-panel').hidden=true;if(state.task){state.task.month=state.month;state.task.productionDate=state.productionDate;if(state.manager&&state.applyManagerProfile)state.applyManagerProfile(state.task,state.manager,{productionDate:state.productionDate});if(state.manager&&state.applyPptManagerProfile)state.applyPptManagerProfile(state.task,state.manager,{productionDate:state.productionDate});state.finishProfiles?.(state.task);clearDownloads();changeStep('review');renderReview();if(state.task.updateMode==='introductions'&&state.task.materials.length)await generateFiles({autoDownload:false});}}
  catch(error){state.monthValid=false;showError(error);}refreshSelection();
 }
 $('month-value').addEventListener('change',()=>changeMonth());
@@ -25,13 +26,18 @@ function refreshSelection(){
   const box=$(key);box.replaceChildren();
   for(const file of files){const row=el('div','file-entry');row.append(el('span','',file.name),el('small','',readableSize(file.size)));const remove=el('button','', '×');remove.type='button';remove.setAttribute('aria-label','移除 '+file.name);remove.disabled=state.busy;remove.onclick=()=>{if(key==='contract-files'){state.contract=null;$('contract-input').value='';}else state.templates=state.templates.filter(f=>f!==file);invalidate();refreshSelection();};row.append(remove);box.append(row);}
  }
- $('analyze-button').disabled=state.busy||!state.companyReady||!state.managerReady||!state.monthValid||!state.contract||state.templates.length===0;
- $('generate-button').disabled=state.busy||!state.monthValid||!state.task;
+ $('analyze-button').disabled=state.busy||!state.companyReady||!state.managerReady||!state.monthValid||(!state.introductionsOnly&&!state.contract)||state.templates.length===0;
+ $('generate-button').disabled=state.busy||!state.monthValid||!state.task||!state.task.materials.length;
+ $('introductions-only').disabled=state.busy;$('contract-drop').hidden=state.introductionsOnly;
+ $('upload-description').textContent=state.introductionsOnly?'上传待更新的一页通或 PPT，使用当前公司资料与经理 Excel，无需产品合同。':'一份目标产品合同，以及至少一份模板。';
+ $('scope-description').textContent=state.introductionsOnly?'仅更新匹配到的公司和经理介绍，保留各模板产品名称及产品要素。':'产品要素＋一页通和 PPT 中匹配到的公司介绍、经理介绍。海报仍仅更新产品要素；历史业绩保持原样。';
  $('company-input').disabled=state.busy||!state.companyReady;$('company-clear').disabled=state.busy||!state.companyReady;
  $('company-variant').disabled=state.busy||!state.companyReady;$('company-download').setAttribute('aria-disabled',String(state.busy||!state.companyReady));
  $('manager-input').disabled=state.busy||!state.managerReady;$('manager-clear').disabled=state.busy||!state.managerReady;$('manager-download').setAttribute('aria-disabled',String(state.busy||!state.managerReady));
- $('selection-hint').textContent=state.contract&&state.templates.length?`已选择合同和 ${state.templates.length} 份物料模板。`:'选好文件后，开始核对。';
+ $('selection-hint').textContent=state.introductionsOnly?`仅更新公司和经理介绍 · 已选择 ${state.templates.length} 份模板，无需合同。`:state.contract&&state.templates.length?`已选择合同和 ${state.templates.length} 份物料模板。`:'选好文件后，开始核对。';
 }
+$('introductions-only').checked=false;
+$('introductions-only').addEventListener('change',()=>{if(state.busy)return;state.introductionsOnly=Boolean($('introductions-only').checked);state.filter=state.introductionsOnly?'all':'focus';invalidate();refreshSelection();$('upload-section').hidden=false;});
 function invalidate(){discardSupplementPreview();state.task=null;state.calendar=null;state.calendarMatches=[];$('calendar-input').value='';$('calendar-row').replaceChildren();$('calendar-row').hidden=true;$('calendar-row-label').hidden=true;$('calendar-row-detail').replaceChildren();$('calendar-status').textContent='Excel 在本机读取。根据合同产品匹配，保留来源行供核对。';for(const kind of supplementKinds)$('supplement-'+kind).value='';for(const key of performanceKeys)$('performance-'+key).value='';$('performance-mode').value='single';syncPerformanceMode();$('supplement-preview').hidden=true;$('supplement-notice').hidden=true;$('review-section').hidden=true;clearDownloads();changeStep('upload');$('error-panel').hidden=true;}
 const companyVersionLabel=()=>state.companyVariant==='ccb'?'建行版':'通用版';
 const companySessionKeys=['company','companyBytes','companyTemplate','companyIsDefault','companyPersisted','companyStored','companyWarning'];
@@ -140,34 +146,36 @@ function setBusy(busy){state.busy=busy;$('calendar-drop').setAttribute('aria-bus
 $('dismiss-error').onclick=()=>$('error-panel').hidden=true;
 $('reset-button').onclick=()=>{state.run++;state.contract=null;state.templates=[];$('contract-input').value='';$('templates-input').value='';invalidate();updateMonth(true);refreshSelection();$('upload-section').hidden=false;window.scrollTo({top:0,behavior:'smooth'});};
 $('analyze-button').onclick=async()=>{
- if(state.busy||!state.companyReady||!state.managerReady)return;try{updateMonth();}catch(error){showError(error);return;}const run=++state.run;invalidate();setBusy(true);progress('正在读取合同','建立本次合同索引，保留文字出处。');await nextPaint();
+ if(state.busy||!state.companyReady||!state.managerReady||(!state.introductionsOnly&&!state.contract)||!state.templates.length)return;try{updateMonth();}catch(error){showError(error);return;}const run=++state.run;invalidate();setBusy(true);progress(state.introductionsOnly?'正在准备介绍更新':'正在读取合同',state.introductionsOnly?'使用当前保存的公司资料和经理 Excel。':'建立本次合同索引，保留文字出处。');await nextPaint();
  try{
   if(!state.manager||!state.applyManagerProfile){await restoreManager();if(!state.manager||!state.applyManagerProfile)throw new Error('经理介绍功能暂未加载完成，请刷新网页后重新核对。');}
-  const [{readWordContract,readWordTemplate},reviewApi]=await Promise.all([import('./word-input.js?v=20261027-custom-investment'),import('./review-engine.js?v=20261029-risk-custom')]);state.reviewApi=reviewApi;const {analyzeMaterials}=reviewApi;
-  const contract=await readWordContract({name:state.contract.name,bytes:new Uint8Array(await state.contract.arrayBuffer())},{onProgress:progress});
+  const [{readWordContract,readWordTemplate},reviewApi,profileApi]=await Promise.all([import('./word-input.js?v=20261027-custom-investment'),state.introductionsOnly?Promise.resolve({}):import('./review-engine.js?v=20261029-risk-custom'),import('./introduction-task.js?v=20261029-ppt-profiles')]);state.reviewApi=reviewApi;state.finishProfiles=profileApi.finalizeIntroductionTask;
+  const contract=state.introductionsOnly?null:await readWordContract({name:state.contract.name,bytes:new Uint8Array(await state.contract.arrayBuffer())},{onProgress:progress});
   const templates=[],inputIssues=[],seen=new Set();
   for(const [i,file]of state.templates.entries()){
    progress(`正在准备模板 ${i+1} / ${state.templates.length}`,`接受旧修订，按需转换 DOCX：${file.name}`);await nextPaint();
    try{
     const template=await readWordTemplate({name:file.name,bytes:new Uint8Array(await file.arrayBuffer())},{onProgress:progress});
     const hash=template.sourceSha256||template.sha256;
-    if(hash===contract.sha256){inputIssues.push({sourceName:file.name,reason:'contract',message:'与合同是同一份文件，已从模板中跳过。'});continue;}
+    if(contract&&hash===contract.sha256){inputIssues.push({sourceName:file.name,reason:'contract',message:'与合同是同一份文件，已从模板中跳过。'});continue;}
     if(seen.has(hash)){inputIssues.push({sourceName:file.name,reason:'duplicate',message:'与已选模板内容相同，已合并重复项。'});continue;}
     seen.add(hash);templates.push(template);
    }catch(error){inputIssues.push({sourceName:file.name,reason:'failed',message:error.message||String(error)});}
   }
   if(!templates.length)throw new Error('没有可更新的模板。'+inputIssues.map(i=>`${i.sourceName}：${i.message}`).join('\n'));
-  progress('正在统一核对产品要素','合并共同需求，查找合同依据，再定位各物料的改动。');await nextPaint();
-  const task=await analyzeMaterials(contract,templates,{now:state.started,month:state.month});task.now=state.started;task.productionDate=state.productionDate;task.inputIssues=inputIssues;
-  if(state.company){progress('正在核对一页通公司介绍',companyVersionLabel()+' · '+state.company.name);await nextPaint();const {applyCompanyProfile}=await import('./company-profile.js?v=20261029-company-versions');await applyCompanyProfile(task,state.company);}
-  if(state.manager&&state.applyManagerProfile){progress('正在更新一页通经理介绍',state.manager.name);await nextPaint();state.applyManagerProfile(task,state.manager,{productionDate:state.productionDate});}
+  progress(state.introductionsOnly?'正在定位介绍内容':'正在统一核对产品要素',state.introductionsOnly?'分别匹配公司主体及每位经理，保留模板产品名称。':'合并共同需求，查找合同依据，再定位各物料的改动。');await nextPaint();
+  const task=state.introductionsOnly?profileApi.createIntroductionTask(templates,{now:state.started,month:state.month,productionDate:state.productionDate}):await reviewApi.analyzeMaterials(contract,templates,{now:state.started,month:state.month});task.now=state.started;task.productionDate=state.productionDate;task.inputIssues=[...(task.inputIssues||[]),...inputIssues];
+  if(state.company){progress('正在核对公司介绍',companyVersionLabel()+' · '+state.company.name);await nextPaint();const [{applyCompanyProfile},{applyPptCompanyProfile}]=await Promise.all([import('./company-profile.js?v=20261029-company-versions'),import('./ppt-company-profile.js?v=20261029-ppt-profiles')]);await applyCompanyProfile(task,state.company);applyPptCompanyProfile(task,state.company);}
+  if(state.manager&&state.applyManagerProfile){progress('正在更新经理介绍',state.manager.name);await nextPaint();const {applyPptManagerProfile}=await import('./ppt-manager-profile.js?v=20261029-ppt-profiles');state.applyPptManagerProfile=applyPptManagerProfile;state.applyManagerProfile(task,state.manager,{productionDate:state.productionDate});applyPptManagerProfile(task,state.manager,{productionDate:state.productionDate});}
+  profileApi.finalizeIntroductionTask(task);
   if(run!==state.run)return;
   state.task=task;const feeGroups=groups().filter(g=>g.kind==='performance');if(feeGroups.length===1&&groupFacts(feeGroups[0]).some(f=>f.key==='performance_R2'))$('performance-mode').value='tiered';syncPerformanceMode();renderReview();$('upload-section').hidden=true;$('review-section').hidden=false;changeStep('review');
  }catch(error){showError(error);}finally{if(run===state.run){setBusy(false);$('progress-panel').hidden=true;}}
+ if(run===state.run&&state.task?.updateMode==='introductions'){if(state.task.materials.length)await generateFiles({autoDownload:false});else generationStatus('未找到与当前资料匹配的介绍，相关模板已跳过。','warning');}
 };
 function factChanged(fact){return state.task.materials.some(m=>m.operations.some(o=>o.kind==='replace'&&o.factIds?.includes(fact.id)));}
 function factStatus(fact){return fact.status==='verified'?(factChanged(fact)?'changed':'verified'):(fact.status==='conflict'?'conflict':'pending');}
-function materialName(m){try{return deliveryName(m.template.name,{targetName:state.task.target.name,templateProductName:m.templateProductName,kind:m.kind,month:state.task.month});}catch(error){return m.template.name+'（命名待检查）';}}
+function materialName(m){try{return materialDeliveryName(m,{targetName:state.task.target.name,month:state.task.month});}catch(error){return m.template.name+'（命名待检查）';}}
 function sourceTitle(evidence){if(String(evidence.blockId).startsWith('manager-'))return '经理介绍 Excel 依据';if(String(evidence.blockId).startsWith('user-custom'))return '用户自定义内容';if(String(evidence.blockId).startsWith('company-'))return '最新公司介绍依据';if(String(evidence.blockId).startsWith('user-calendar')){const s=evidence.source||{};return '产品日历补充'+(s.file?'：'+s.file+' · '+(s.sheet||'')+' · 第'+s.row+'行':'');}if(String(evidence.blockId).startsWith('user-confirm'))return '人工确认';if(evidence.blockId==='user-supplement')return '手动补充';if(String(evidence.blockId).startsWith('template-'))return '模板中的说明';return '合同依据';}
 function renderFact(fact){
  const row=el('article','fact-row');row.dataset.factId=fact.id;const status=factStatus(fact);const head=el('div','fact-heading');head.append(el('strong','',fact.label||fact.key));head.append(el('span','badge '+status,({changed:'已修改',verified:'原样保留',pending:'保留待核',conflict:'需要复核'})[status]));const count=new Set((fact.occurrences||[]).map(o=>o.materialId+'|'+o.paragraphId)).size;head.append(el('small','',`关联 ${count} 处`));row.append(head);
@@ -184,7 +192,7 @@ function renderFact(fact){
 }
 function renderManagerFact(facts){
  const fact=facts[0],ids=new Set(facts.map(f=>f.id));
- const row=el('article','fact-row manager-review');const heading=el('div','fact-heading');heading.append(el('h4','',fact.label),el('span','badge verified',factChanged(fact)?'已更新':'已核对'));row.append(heading);
+ const row=el('article','fact-row manager-review');const heading=el('div','fact-heading');heading.append(el('h4','',fact.label),el('span','badge verified',facts.some(factChanged)?'已更新':'已核对'));row.append(heading);
  row.append(el('p','supplement-note','按经理 Excel 完整更新；Word 审阅仅标出差异。制作日期：'+state.productionDate));
  row.append(el('p','manager-biography',fact.value||''));
  if(fact.reason)row.append(el('p','supplement-note',fact.reason));
@@ -206,10 +214,12 @@ function groups(){
  for(const group of base){
   if(group.kind!=='text'){cards.set(group.id,group);continue;}
   const fs=groupFacts(group),scope={...group.scope};
+  const managerGroup=fs.length&&fs.every(f=>f.source==='manager');
+  if(managerGroup){delete scope.page;delete scope.pages;}
   // Only a condition that literally represents the original wording is ignored
   // for display. Shares, channels and semantic conditions stay independent.
   if(scope.condition&&fs.every(f=>(state.task._records||[]).some(r=>r.f===f&&normalize(r.atom.before)===scope.condition)))delete scope.condition;
-  const identity=JSON.stringify([group.label,[...new Set(fs.map(f=>f.key))].sort(),Object.keys(scope).sort().map(k=>[k,scope[k]])]);
+  const identity=JSON.stringify([group.label,[...new Set(fs.map(f=>f.key))].sort(),Object.keys(scope).sort().map(k=>[k,scope[k]]),...(managerGroup?[fs.map(f=>[f.value,(f.evidence||[]).map(e=>e.blockId)])]:[])]);
   const existing=cards.get(identity);
   if(existing){existing.members.push(group);existing.factIds.push(...group.factIds);}
   else cards.set(identity,{...group,id:'review-'+group.id,scope,factIds:[...group.factIds],members:[group]});
@@ -406,10 +416,12 @@ calendarDrop.addEventListener('dragleave',e=>{if(!calendarDrop.contains(e.relate
 calendarDrop.addEventListener('drop',e=>{e.preventDefault();calendarDrop.classList.remove('dragging');return selectCalendar(e.dataTransfer?.files);});
 function renderReview(){
  const task=state.task;$('target-name').textContent=task.target.name;$('review-subtitle').textContent=`${task.templates.length} 份模板 · 同口径要素共享核对 · 制作日期 ${task.productionDate||state.productionDate} · 文件名月份 ${task.month}`+(state.company?' · 公司介绍（'+companyVersionLabel()+'）：'+state.company.name:'');
+ const only=task.updateMode==='introductions';$('supplement-panel').hidden=only;$('review-eyebrow').textContent=only?'本次更新范围':'本次目标产品';$('facts-heading').textContent=only?'介绍核对':'要素核对';$('delivery-explanation').textContent=only?'仅更新公司和经理介绍；Word 保留本轮审阅修订，PPT 保留对应介绍页。':'黄色表示原值仍需确认，不影响生成审阅稿。下载后可在 Word 中查看修订与批注。';
+ if(only)$('review-subtitle').textContent=`${task.templates.length} 份模板 · 保留各模板原产品名称 · 制作日期 ${task.productionDate||state.productionDate} · 文件名月份 ${task.month}`;
  $('count-facts').textContent=groups().length;$('count-updates').textContent=task.materials.reduce((n,m)=>n+m.operations.filter(o=>o.kind==='replace').length,0);$('count-pending').textContent=groups().filter(g=>groupFacts(g).some(f=>f.status!=='verified')||sectionPending(sectionReview(g))).length;$('count-materials').textContent=task.materials.length;
  const warnings=[...(task.warnings||[]),...(task.inputIssues||[]).map(i=>`${i.sourceName}：${i.reason==='failed'?'未处理，':''}${i.message}`),...task.materials.flatMap(m=>(m.warnings||[]).map(w=>m.template.name+'：'+(typeof w==='string'?w:w.message||String(w))))];$('warnings').replaceChildren();for(const warning of [...new Set(warnings)])$('warnings').append(el('p','',typeof warning==='string'?warning:warning.message||String(warning)));
  const deliveryNames=uniqueDeliveryNames(task.materials.map(materialName));
- $('delivery-list').replaceChildren();for(const [index,m] of task.materials.entries()){const item=el('div','delivery-item');item.append(el('span','kind',({word:'WORD · 一页通',ppt:'PPT · 产品要素',poster:'PPT · 海报'})[m.kind]||'物料'),el('strong','',deliveryNames[index]));const page=m.kind==='ppt'?`仅输出源第 ${(m.selectedPages||[]).join('、')} 页`:(m.kind==='poster'?'保留海报全部页面':'接受旧修订，保留本轮新修订');item.append(el('p','',page));$('delivery-list').append(item);}renderFacts();
+ $('delivery-list').replaceChildren();for(const [index,m] of task.materials.entries()){const item=el('div','delivery-item');const hasProfiles=['company','manager'].some(key=>m.profilePages?.[key]?.length),kindLabel=m.kind==='ppt'?(only?'PPT · 公司及经理介绍':hasProfiles?'PPT · 产品要素及介绍':'PPT · 产品要素'):({word:'WORD · 一页通',poster:'PPT · 海报'})[m.kind]||'物料';item.append(el('span','kind',kindLabel),el('strong','',deliveryNames[index]));const page=m.kind==='ppt'?`仅输出源第 ${(m.selectedPages||[]).join('、')} 页`:(m.kind==='poster'?'保留海报全部页面':'接受旧修订，保留本轮新修订');item.append(el('p','',page));$('delivery-list').append(item);}renderFacts();
 }
 document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{state.filter=b.dataset.filter;renderFacts();});
 function downloadLink(bytes,mime,name,parent){const url=URL.createObjectURL(new Blob([bytes],{type:mime}));state.urls.push(url);const link=el('a','',name);link.href=url;link.download=name;parent.append(link);return link;}
@@ -417,7 +429,7 @@ function generationStatus(message,kind='progress'){const box=$('generation-statu
 function deliveryIssues(task,result){return [...(task.inputIssues||[]).filter(i=>i.reason==='failed'),...(result.failures||[])];}
 function deliveryNotes(task,result){return [...(task.warnings||[]).map(w=>typeof w==='string'?w:w.message||String(w)),...(task.inputIssues||[]).map(i=>`${i.sourceName}：${i.reason==='failed'?'未生成，':''}${i.message}`),...task.materials.flatMap(m=>(m.warnings||[]).map(w=>m.template.name+'：'+(typeof w==='string'?w:w.message||String(w)))),...result.files.flatMap(f=>(f.report?.repairs||[]).map(r=>f.name+'：'+(typeof r==='string'?r:r.message||r.kind))),...(result.failures||[]).map(f=>`未生成 ${f.sourceName}：${f.message}`)];}
 function reviewText(task,result){
- const lines=['物料审阅清单',`目标产品：${task.target.name}`,`制作日期：${task.productionDate||state.productionDate}`,`文件名月份：${task.month}`,`经理介绍：${state.manager?.name||'未使用'}`,`公司介绍：${state.company?companyVersionLabel()+' · '+state.company.name:'未使用'}`,'','本次更新产品要素及匹配到的一页通公司介绍、经理介绍；历史业绩保持原样。','黄色表示原值仍需确认，不代表合同已核实。','','输出文件：',...result.files.map(f=>f.name),'','核对事项：'];
+ const lines=['物料审阅清单',`目标产品：${task.target.name}`,`制作日期：${task.productionDate||state.productionDate}`,`文件名月份：${task.month}`,`经理介绍：${state.manager?.name||'未使用'}`,`公司介绍：${state.company?companyVersionLabel()+' · '+state.company.name:'未使用'}`,'',task.updateMode==='introductions'?'本次仅更新公司和经理介绍；保留各模板产品名称和产品要素。':'本次更新产品要素及匹配到的公司介绍、经理介绍；历史业绩保持原样。','黄色表示原值仍需确认，不代表合同已核实。','','输出文件：',...result.files.map(f=>f.name),'','核对事项：'];
  const sections=groups().map(group=>({group,section:sectionReview(group)})).filter(x=>x.section),coveredIds=new Set(sections.flatMap(x=>x.group.factIds));
  for(const f of task.facts){lines.push(`${f.label}｜${f.status==='verified'?(isConfirmed(f)?'用户确认原值':f.source==='user_calendar'?'产品日历补充':f.source==='user_custom_section'?'用户自定义整项替换':f.source==='user'?'用户补充':f.source==='company'?'公司介绍依据':f.source==='manager'?'经理介绍 Excel 依据':'合同核对'):'保留待核'}｜${f.value??'保留各模板原值'}`,f.reason||'');for(const e of(f.evidence||[]).filter(e=>!coveredIds.has(f.id)||sourceTitle(e)!=='合同依据').slice(0,2))lines.push(sourceTitle(e)+'：'+e.quote);lines.push('');}
  for(const {group,section}of sections){
@@ -430,16 +442,17 @@ function reviewText(task,result){
  const notes=deliveryNotes(task,result);if(notes.length)lines.push('','文件处理提示：',...notes);
  return lines.join('\r\n');
 }
-$('generate-button').onclick=async()=>{
+async function generateFiles({autoDownload=true}={}){
  if(!state.task||state.busy||!state.monthValid)return;setBusy(true);$('error-panel').hidden=true;clearDownloads();generationStatus('正在生成物料，请稍候…');$('generate-button').textContent='正在生成…';await nextPaint();
  try{
-  const {writeTask}=await import('./office-writer.js?v=20261029-manager');const result=await writeTask(state.task);generationStatus(`已完成 ${result.files.length} 份物料，正在准备下载包…`);const zip=new globalThis.JSZip();for(const file of result.files)zip.file(file.name,file.bytes);zip.file('审阅清单.txt','\uFEFF'+reviewText(state.task,result));const bundle=await zip.generateAsync({type:'uint8array',compression:'DEFLATE'});
+  const {writeTask}=await import('./office-writer.js?v=20261029-ppt-profiles');const result=await writeTask(state.task);generationStatus(`已完成 ${result.files.length} 份物料，正在准备下载包…`);const zip=new globalThis.JSZip();for(const file of result.files)zip.file(file.name,file.bytes);zip.file('审阅清单.txt','\uFEFF'+reviewText(state.task,result));const bundle=await zip.generateAsync({type:'uint8array',compression:'DEFLATE'});
   const issues=deliveryIssues(state.task,result),box=$('download-list');box.append(el('p','download-success',`已生成 ${result.files.length} 份物料，可下载审阅。`));const bundleLink=downloadLink(bundle,'application/zip',`${state.task.target.shortName||'产品物料'}_${state.task.month}.zip`,box);for(const file of result.files)downloadLink(file.bytes,file.mime,file.name,box);changeStep('download');
   for(const note of deliveryNotes(state.task,result))box.append(el('p','delivery-note',note));
-  generationStatus((issues.length?`已生成 ${result.files.length} 份，${issues.length} 份未生成，原因见下方。`:'已生成。')+'若未自动开始下载，请点击下方下载包或单个文件。',issues.length?'warning':'success');box.scrollIntoView({block:'nearest'});
+  generationStatus((issues.length?`已生成 ${result.files.length} 份，${issues.length} 份未生成，原因见下方。`:'已生成。')+(autoDownload?'若未自动开始下载，请点击下方下载包或单个文件。':'请直接点击下方下载包或单个文件。'),issues.length?'warning':'success');box.scrollIntoView({block:'nearest'});
   // A browser may decline an automatic download after asynchronous work. The
   // visible direct links must remain usable regardless of that browser policy.
-  try{bundleLink.click();}catch{}
+  if(autoDownload)try{bundleLink.click();}catch{}
  }catch(error){generationStatus('生成失败：'+(error.message||String(error)),'error');showError(error);}finally{setBusy(false);$('generate-button').textContent='生成并下载物料';$('progress-panel').hidden=true;}
-};
+}
+$('generate-button').onclick=()=>generateFiles();
 updateMonth(true);refreshSelection();const appReady=Promise.all([restoreCompany(),restoreManager()]);

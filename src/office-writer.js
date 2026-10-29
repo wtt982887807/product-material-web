@@ -1,5 +1,5 @@
 import {NS,parseXml,serializeXml,elements,children,textOf,sha256,isVisibleBranch} from './office-xml.js';
-import {deliveryName,currentMonth,uniqueDeliveryNames} from './naming.js?v=20261026-drop';
+import {materialDeliveryName,currentMonth,uniqueDeliveryNames} from './naming.js?v=20261029-ppt-profiles';
 import {OfficePackage,fail,tag,create,setW,directElements,allocateWordIds,wordCommentPart,enableWordTracking,repairPptCommentAuthors,createPptCommentState,addPptComment,subsetPresentation,presentationOrder,validatePackage} from './office-package.js';
 
 const AUTHOR='产品要素核对';
@@ -8,6 +8,9 @@ const XML=NS.xml||'http://www.w3.org/XML/1998/namespace';
 const MIME={docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation'};
 const between=(x,start,end)=>x>start&&x<end;
 const overlaps=(a,b)=>a.start<b.end&&b.start<a.end;
+const profileSource=source=>source==='company'||source==='manager';
+const profilePptReplacement=op=>op.profilePpt===true&&op.kind==='replace'&&profileSource(op.source);
+const profilePptParagraphOperation=op=>profilePptReplacement(op)&&(op.profileParagraphs===true||op.profileDeleteParagraph===true);
 
 function location(entry) {
   return `${entry.op.part}，段落 ${entry.op.index+1}，原文「${entry.op.before.slice(0,45)}」`;
@@ -205,8 +208,8 @@ function sectionBreak(run,kind){
 function replaceCustomPptParagraphs(entry,content,lines,fallback){
   const {paragraph,op}=entry,properties=children(paragraph,A,'pPr')[0],ending=children(paragraph,A,'endParaRPr')[0];
   // A forced break stretches a justified line across the entire table cell.
-  // Only explicit custom replacements use new paragraphs; other sources keep
-  // their existing line and revision handling unchanged.
+  // Explicit custom and profile replacements use native paragraphs. Other
+  // sources keep their existing line and revision handling unchanged.
   const output=[];
   for(const [index,line]of op.after.split('\n').entries()){
     const target=index?paragraph.cloneNode(false):paragraph;
@@ -224,6 +227,46 @@ function replaceCustomPptParagraphs(entry,content,lines,fallback){
   }
   entry.outputParagraphs=output;
   return {replaced:true,section:true};
+}
+function profilePptContent(entry){
+  const {paragraph,op}=entry,parent=paragraph.parentNode;
+  if(!(tag(parent,NS.p,'txBody')||tag(parent,A,'txBody')))failAt(entry,'PPT 介绍必须定位到原生文本框或表格段落');
+  if(op.start!==0||op.before!==textOf(paragraph,'pptx'))failAt(entry,'PPT 介绍更新必须准确对应整段原文');
+  // Empty old paragraphs may only be removed with the explicit deletion flag.
+  // An empty paragraph cannot act as a general-purpose insertion anchor.
+  if(op.profileDeleteParagraph&&op.before===''&&directElements(paragraph).every(n=>tag(n,A,'pPr')||tag(n,A,'endParaRPr')))return [];
+  return sectionContent(entry,'pptx');
+}
+function profilePptInsertionRun(entry){
+  const records=textRecords(entry.paragraph,'pptx'),position=entry.start;
+  const record=records.find(r=>r.start<=position&&position<r.end)||records.findLast(r=>r.end===position);
+  const run=record?.node.parentNode;
+  if(!run||!isPlainRun(run,entry.paragraph,'pptx'))failAt(entry,'PPT 介绍新增文字无法从普通文字继承原样式');
+  return {run,node:record.node,start:record.start,text:record.text};
+}
+function insertProfilePpt(entry){
+  const anchor=profilePptInsertionRun(entry),offset=entry.start-anchor.start;
+  // At a run boundary, retain the untouched run exactly and add only the new
+  // text with its anchor's properties. Within a run, its existing style stays.
+  if(offset===0||offset===anchor.text.length){
+    const inserted=runPiece(anchor.run,entry.op.after,'pptx');
+    anchor.run.parentNode.insertBefore(inserted,offset===0?anchor.run:anchor.run.nextSibling);
+    return {replaced:true,profilePpt:true};
+  }
+  anchor.node.textContent=anchor.text.slice(0,offset)+entry.op.after+anchor.text.slice(offset);
+  if(/^\s|\s$/u.test(anchor.node.textContent))anchor.node.setAttributeNS(XML,'xml:space','preserve');
+  return {replaced:true,profilePpt:true};
+}
+function replaceProfilePpt(entry){
+  const {paragraph,op}=entry,content=profilePptContent(entry);
+  if(op.profileDeleteParagraph){
+    if(children(paragraph.parentNode,A,'p').length>1){paragraph.parentNode.removeChild(paragraph);entry.outputParagraphs=[];}
+    else{for(const node of content)paragraph.removeChild(node);entry.outputParagraphs=[paragraph];}
+    return{replaced:true,profilePpt:true,paragraphDeleted:entry.outputParagraphs.length===0};
+  }
+  const lines=sectionStyleLines(paragraph,'pptx'),fallback=lines.flatMap(line=>line.spans)[0]?.run||content.find(n=>tag(n,A,'r'));
+  if(!fallback)failAt(entry,'PPT 介绍缺少可继承的文字样式');
+  return{...replaceCustomPptParagraphs(entry,content,lines,fallback),profilePpt:true};
 }
 function replaceSection(entry,kind,nextId,timestamp){
   const {paragraph,op}=entry,content=sectionContent(entry,kind),lines=sectionStyleLines(paragraph,kind);
@@ -247,6 +290,8 @@ function replaceSection(entry,kind,nextId,timestamp){
 
 function replace(entry,kind,nextId,timestamp) {
   if(kind==='docx'&&entry.op.source==='manager')return replaceManager(entry,nextId,timestamp);
+  if(kind==='pptx'&&profilePptParagraphOperation(entry.op))return replaceProfilePpt(entry);
+  if(kind==='pptx'&&profilePptReplacement(entry.op)&&entry.start===entry.end)return insertProfilePpt(entry);
   if(sectionReplacement(entry.op))return replaceSection(entry,kind,nextId,timestamp);
   const segments=runSegments(entry,kind),ids=[];let remaining=entry.op.after;
   for(let i=0;i<segments.length;i++){
@@ -340,8 +385,13 @@ async function prepare(pkg,review) {
     if(!op.id||ids.has(op.id))fail('审阅操作编号缺失或重复。');ids.add(op.id);
     if(!['replace','highlight','comment'].includes(op.kind))fail(`不支持的审阅操作：${op.kind}`);
     const manager=kind==='docx'&&op.source==='manager'&&op.kind==='replace';
-    if(!Number.isInteger(op.start)||op.start<0||typeof op.before!=='string'||(!op.before.length&&!manager))fail('审阅操作缺少有效原文位置。');
-    if(op.kind==='replace'&&(typeof op.after!=='string'||(sectionReplacement(op)||manager?/[\r\t]/:/[\r\n\t]/).test(op.after)))fail('替换内容包含不支持的分段或制表结构，需人工核对。');
+    const profile=kind==='pptx'&&profilePptReplacement(op);
+    if(op.profilePpt!==undefined&&!profile)fail('PPT 介绍标记仅支持公司或经理来源的文字替换。');
+    if(op.profileParagraphs!==undefined&&(!profile||op.profileParagraphs!==true||typeof op.after!=='string'||!op.after.includes('\n')))fail('PPT 介绍新增段落必须由公司或经理来源明确标记并提供分段文字。');
+    if(op.profileDeleteParagraph!==undefined&&(!profile||op.profileDeleteParagraph!==true||op.after!==''))fail('PPT 介绍删除段落标记必须对应空的整段替换。');
+    if(!Number.isInteger(op.start)||op.start<0||typeof op.before!=='string'||(!op.before.length&&!manager&&!profile))fail('审阅操作缺少有效原文位置。');
+    if(op.kind==='replace'&&(typeof op.after!=='string'||(sectionReplacement(op)||manager||profile&&op.profileParagraphs?/[\r\t]/:/[\r\n\t]/).test(op.after)))fail('替换内容包含不支持的分段或制表结构，需人工核对。');
+    if(profile&&!op.before&&!op.after&&!op.profileDeleteParagraph)fail('PPT 介绍新增文字不能为空。');
     const descriptor=paragraphsById.get(op.paragraphId);
     if(!descriptor||descriptor.part!==op.part||descriptor.index!==op.index)fail(`审阅操作无法唯一定位原段落：${op.id}`);
     if(!Number.isInteger(op.index)||op.index<0)fail('审阅段落编号无效。');
@@ -357,13 +407,16 @@ async function prepare(pkg,review) {
       const {position,texts}=op.managerParagraphs;
       if(!manager||!['before','after'].includes(position)||!Array.isArray(texts)||!texts.length||texts.some(t=>typeof t!=='string'||!t||/[\r\n\t]/.test(t))||op.before!==''||op.start!==(position==='before'?0:source.length)||op.after!==(position==='before'?texts.join('\n')+'\n':'\n'+texts.join('\n')))failAt(entry,'经理简介新增段落结构不完整');
       entry.managerSeed=managerParagraphSeed(entry).cloneNode(true);
-    }else if(manager&&entry.start===entry.end)managerInsertionRun(entry);else if(sectionReplacement(op))sectionContent(entry,kind);else runSegments(entry,kind);
+    }else if(profilePptParagraphOperation(op))profilePptContent(entry);else if(profile&&entry.start===entry.end)profilePptInsertionRun(entry);else if(manager&&entry.start===entry.end)managerInsertionRun(entry);else if(sectionReplacement(op))sectionContent(entry,kind);else runSegments(entry,kind);
     const key=`${op.part}\u0000${op.index}`;
     if(!groups.has(key))groups.set(key,{paragraph,source,entries:[]});groups.get(key).entries.push(entry);
   }
   for(const group of groups.values()){
+    if(group.entries.some(e=>profilePptParagraphOperation(e.op))&&group.entries.length!==1)failAt(group.entries[0],'PPT 介绍整段更新不能与同段其他操作混用');
     if(group.entries.some(e=>sectionReplacement(e.op))&&group.entries.length!==1)failAt(group.entries[0],'合同整段更新不能与同段其他操作混用');
     const replacements=group.entries.filter(e=>e.op.kind==='replace').sort((a,b)=>a.start-b.start);
+    const insertionPoints=new Set();
+    for(const r of replacements)if(profilePptReplacement(r.op)&&r.start===r.end&&!r.op.profileDeleteParagraph){if(insertionPoints.has(r.start))failAt(r,'同一位置的介绍新增文字需先合并');insertionPoints.add(r.start);}
     for(let i=1;i<replacements.length;i++)if(overlaps(replacements[i-1],replacements[i]))failAt(replacements[i],'替换范围重叠，需先合并审阅操作');
     for(const e of group.entries)if(e.op.kind!=='replace')for(const r of replacements){
       if(e.op.kind==='highlight'&&overlaps(e,r))failAt(e,'保留待核的标黄范围与替换范围重叠');
@@ -388,10 +441,32 @@ function validateWordComments(pkg,comments,ids) {
   }
 }
 
+function validateIntroductionReview(review){
+  const {template}=review,fields=review.fields||[],paragraphs=new Map(template.paragraphs.map(p=>[p.id,p]));
+  if(!fields.length||fields.some(f=>!profileSource(f.source)||!Array.isArray(f.paragraphIds)||!f.paragraphIds.length||f.paragraphIds.some(id=>!paragraphs.has(id))))fail('仅更新介绍需要已匹配的公司或经理来源字段。');
+  const pagesBySource={};
+  if(template.kind==='pptx'){
+    for(const source of ['company','manager']){
+      const pages=review.profilePages?.[source]||[];
+      if(!Array.isArray(pages)||pages.some(p=>!Number.isInteger(p)||p<1||p>template.slides.length))fail('介绍识别页面无效，请重新匹配。');
+      pagesBySource[source]=new Set(pages);
+    }
+    const recognized=new Set([...pagesBySource.company,...pagesBySource.manager]);
+    if(!recognized.size||!Array.isArray(review.selectedPages)||!review.selectedPages.length||review.selectedPages.some(p=>!recognized.has(p)))fail('仅更新介绍只能交付已识别的介绍页面。');
+    if(fields.some(f=>f.paragraphIds.some(id=>!pagesBySource[f.source].has(paragraphs.get(id).page))))fail('介绍字段与对应来源识别的页面不匹配。');
+  }
+  for(const op of review.operations||[]){
+    if(!profileSource(op.source)||op.kind!=='replace'||template.kind==='pptx'&&!profilePptReplacement(op))fail('仅更新介绍不能包含产品或其他来源的修改。');
+    const linked=fields.filter(f=>f.source===op.source&&f.paragraphIds.includes(op.paragraphId)),facts=new Set(linked.flatMap(f=>f.factIds||[]));
+    if(!linked.length||!Array.isArray(op.factIds)||!op.factIds.length||op.factIds.some(id=>!facts.has(id)))fail('介绍修改没有匹配同一来源的字段与证据。');
+  }
+}
+
 export async function writeMaterial(materialReview,{month,targetName,now=new Date()}={}) {
   const template=materialReview?.template;
   if(!template||!['docx','pptx'].includes(template.kind))fail('请选择有效的 Word 或 PPTX 模板。');
-  if(materialReview.productElementsLocated===false)fail('未识别到可定位的产品要素，未生成此模板，避免只改文件名而保留旧产品正文。');
+  if(materialReview.updateMode==='introductions')validateIntroductionReview(materialReview);
+  else if(materialReview.productElementsLocated===false)fail('未识别到可定位的产品要素，未生成此模板，避免只改文件名而保留旧产品正文。');
   const sourceHash=await sha256(template.bytes);
   if(template.sha256&&template.sha256!==sourceHash)fail('上传的模板在审阅后发生变化，请重新上传。');
   const pkg=await OfficePackage.load(template.bytes),groups=await prepare(pkg,materialReview),kind=template.kind;
@@ -403,7 +478,7 @@ export async function writeMaterial(materialReview,{month,targetName,now=new Dat
   const pptState=kind==='pptx'&&hasComments?await createPptCommentState(pkg,AUTHOR):null;
   const results=[],commentIds=[];
   for(const group of groups.values()){
-    const replacements=group.entries.filter(e=>e.op.kind==='replace').sort((a,b)=>b.start-a.start||(a.op.managerParagraphs?.position==='after'?-1:b.op.managerParagraphs?.position==='after'?1:a.op.managerParagraphs?.position==='before'?1:b.op.managerParagraphs?.position==='before'?-1:0));
+    const replacements=group.entries.filter(e=>e.op.kind==='replace').sort((a,b)=>b.start-a.start||(profilePptReplacement(a.op)||profilePptReplacement(b.op)?b.end-a.end:a.op.managerParagraphs?.position==='after'?-1:b.op.managerParagraphs?.position==='after'?1:a.op.managerParagraphs?.position==='before'?1:b.op.managerParagraphs?.position==='before'?-1:0));
     for(const entry of replacements)results.push({id:entry.op.id,kind:'replace',...replace(entry,kind,nextId,timestamp)});
     for(const entry of group.entries.filter(e=>e.op.kind==='highlight'))results.push({id:entry.op.id,kind:'highlight',...highlight(entry,kind,replacements)});
     for(const entry of group.entries.filter(e=>e.op.kind==='comment')){
@@ -422,7 +497,7 @@ export async function writeMaterial(materialReview,{month,targetName,now=new Dat
   let slideReport={};
   if(kind==='pptx'){
     const order=await presentationOrder(pkg);
-    const pages=materialReview.kind==='poster'?order.slides.map((s,i)=>i+1):materialReview.selectedPages;
+    const pages=materialReview.kind==='poster'&&materialReview.updateMode!=='introductions'?order.slides.map((s,i)=>i+1):materialReview.selectedPages;
     const retained=new Set(pages?.map(n=>order.slides[n-1]?.part));
     if(entries.some(e=>!retained.has(e.op.part)))fail('存在指向非交付页面的修改，请先完成目标产品页选择。');
     slideReport=await subsetPresentation(pkg,pages);
@@ -433,7 +508,7 @@ export async function writeMaterial(materialReview,{month,targetName,now=new Dat
   const bytes=await pkg.serialize();
   if(await sha256(template.bytes)!==sourceHash)fail('生成期间原始文件发生变化，已停止下载。');
   const outputHash=await sha256(bytes);
-  const name=deliveryName(template.name,{targetName,templateProductName:materialReview.templateProductName,kind:materialReview.kind,month:month||currentMonth(now)});
+  const name=materialDeliveryName(materialReview,{targetName,month:month||currentMonth(now)});
   return {name,bytes,mime:MIME[kind],report:{sourceName:template.name,sourceSha256:sourceHash,outputSha256:outputHash,structuralValidation:true,nativeOfficeValidation:'notPerformedInBrowser',businessVerified:!(materialReview.fields||[]).some(f=>['pending','conflict','retained_pending','待核'].includes(f.status)),acceptedRevisions:template.preparation?.acceptedRevisions||0,changedParts,removedParts,repairs:pkg.repairs,operations:results,...slideReport}};
 }
 
@@ -442,7 +517,7 @@ export async function writeTask(task) {
   const files=[],failures=[],now=task.now||new Date(),month=task.month||currentMonth(now),targetName=task.target?.name;
   // Reserve all preview names, including failed items, so surviving deliveries
   // do not unexpectedly take another template's name after a partial failure.
-  const names=uniqueDeliveryNames(task.materials.map((m,i)=>{try{return deliveryName(m.template?.name,{targetName,templateProductName:m.templateProductName,kind:m.kind,month});}catch{return `未命名物料-${i+1}`;}}));
+  const names=uniqueDeliveryNames(task.materials.map((m,i)=>{try{return materialDeliveryName(m,{targetName,month});}catch{return `未命名物料-${i+1}`;}}));
   for(const [index,material]of task.materials.entries()){
     try{const file=await writeMaterial(material,{month,targetName,now});file.name=names[index];files.push(file);}
     catch(error){failures.push({sourceName:material.template?.originalName||material.template?.name||`物料${index+1}`,stage:'generate',message:error.message||String(error)});}
