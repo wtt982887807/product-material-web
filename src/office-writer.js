@@ -33,9 +33,10 @@ function textRecords(paragraph,kind) {
   };
   walk(paragraph);return records;
 }
-function isPlainRun(run,paragraph,kind,{allowInsertion=false}={}) {
+function isPlainRun(run,paragraph,kind,{allowInsertion=false,manager=false}={}) {
   const ns=kind==='docx'?W:A;
-  if(!tag(run,ns,'r')||directElements(run).some(n=>n.namespaceURI!==ns||!['rPr','t'].includes(n.localName)))return false;
+  const allowed=manager&&kind==='docx'?['rPr','t','br','cr','tab']:['rPr','t'];
+  if(!tag(run,ns,'r')||directElements(run).some(n=>n.namespaceURI!==ns||!allowed.includes(n.localName)))return false;
   if(kind==='pptx')return run.parentNode===paragraph&&children(run,A,'t').length===1;
   let parent=run.parentNode;
   // Hyperlink text can be revised without modifying the link target or styling.
@@ -61,7 +62,8 @@ function runSegments(entry,kind,{current=false}={}) {
   const runs=new Set();
   for(const record of touched){
     const run=record.node.parentNode,ns=kind==='docx'?W:A;
-    if(!tag(record.node,ns,'t')||!isPlainRun(run,paragraph,kind))failAt(entry,'此位置包含域、特殊文字结构或非普通文本，无法安全自动修改');
+    const manager=entry.op?.source==='manager'&&kind==='docx';
+    if(!(tag(record.node,ns,'t')||manager&&['br','cr','tab'].some(name=>tag(record.node,ns,name)))||!isPlainRun(run,paragraph,kind,{manager}))failAt(entry,'此位置包含域、特殊文字结构或非普通文本，无法安全自动修改');
     if(kind==='docx'){
       for(let ancestor=run.parentNode;ancestor&&ancestor!==paragraph;ancestor=ancestor.parentNode)if(tag(ancestor,W,'fldSimple')||tag(ancestor,W,'sdtContent'))failAt(entry,'此位置位于域或内容控件内，需人工核对');
       if(wordFieldDepthBefore(run))failAt(entry,'此位置位于 Word 域内，需人工核对');
@@ -82,6 +84,73 @@ function runPiece(run,text,kind,{deleted=false}={}) {
 }
 function replaceNodeWith(node,pieces){const parent=node.parentNode;for(const piece of pieces)parent.insertBefore(piece,node);parent.removeChild(node);}
 function revision(doc,type,id,timestamp){const node=create(doc,W,`w:${type}`);setW(node,'id',id);setW(node,'author',AUTHOR);setW(node,'date',timestamp);return node;}
+
+// Manager biography revisions have their own path so product/contract edits
+// retain their existing anchoring and small-difference semantics.
+function managerPiece(run,text,{deleted=false}={}){
+  const clone=run.cloneNode(true),doc=clone.ownerDocument;
+  for(const node of directElements(clone))if(!tag(node,W,'rPr'))clone.removeChild(node);
+  for(const part of text.split(/([\n\t])/)){
+    if(!part)continue;
+    if(part==='\n'||part==='\t'){clone.appendChild(create(doc,W,part==='\n'?'w:br':'w:tab'));continue;}
+    const node=create(doc,W,deleted?'w:delText':'w:t');node.textContent=part;if(/^\s|\s$/u.test(part))node.setAttributeNS(XML,'xml:space','preserve');clone.appendChild(node);
+  }
+  return clone;
+}
+function managerInsertionRun(entry){
+  const records=textRecords(entry.paragraph,'docx'),position=entry.start;
+  const record=records.find(r=>r.start<=position&&position<r.end)||records.findLast(r=>r.end===position)||records.find(r=>r.start===position);
+  const run=record?.node.parentNode;
+  if(!run||!isPlainRun(run,entry.paragraph,'docx',{manager:true})||wordFieldDepthBefore(run))failAt(entry,'经理简介新增文字无法继承原文字样式');
+  const rr=records.filter(r=>r.node.parentNode===run);return{run,start:rr[0].start,end:rr.at(-1).end,text:rr.map(r=>r.text).join('')};
+}
+function managerParagraphSeed(entry){
+  const runs=textRecords(entry.paragraph,'docx').map(r=>r.node.parentNode).filter(run=>isPlainRun(run,entry.paragraph,'docx',{manager:true})&&!wordFieldDepthBefore(run));
+  const seed=entry.op.managerParagraphs?.position==='after'?runs.at(-1):runs[0];
+  if(!seed)failAt(entry,'经理简介新增段落无法继承原文字样式');return seed;
+}
+function managerBodyText(paragraph){
+  // A tab-stop definition in pPr is formatting, although the legacy reader's
+  // offsets include it. Exclude it only when validating newly added paragraphs.
+  return textRecords(paragraph,'docx').filter(record=>{for(let n=record.node;n&&n!==paragraph;n=n.parentNode)if(tag(n,W,'pPr'))return false;return true;}).map(r=>r.text).join('');
+}
+function markManagerParagraph(paragraph,type,nextId,timestamp){
+  const doc=paragraph.ownerDocument;let pr=children(paragraph,W,'pPr')[0];if(!pr){pr=create(doc,W,'w:pPr');paragraph.insertBefore(pr,paragraph.firstChild);}
+  let rpr=children(pr,W,'rPr')[0];if(!rpr){rpr=create(doc,W,'w:rPr');pr.appendChild(rpr);}
+  const mark=revision(doc,type,nextId(),timestamp);rpr.appendChild(mark);return mark.getAttributeNS(W,'id');
+}
+function insertManagerParagraphs(entry,nextId,timestamp){
+  const {paragraph,op}=entry,{position,texts}=op.managerParagraphs,seed=entry.managerSeed||managerParagraphSeed(entry),ids=[],created=[];
+  const reference=position==='before'?paragraph:paragraph.nextSibling;
+  for(const text of texts){
+    const p=paragraph.cloneNode(false);
+    for(const attribute of Array.from(p.attributes||[]))if(['paraId','textId'].includes(attribute.localName))p.removeAttributeNode(attribute);
+    const pr=children(paragraph,W,'pPr')[0];if(pr){const copy=pr.cloneNode(true);for(const child of elements(copy,W).filter(n=>['ins','del','sectPr'].includes(n.localName)))child.parentNode.removeChild(child);p.appendChild(copy);}
+    ids.push(markManagerParagraph(p,'ins',nextId,timestamp));
+    const ins=revision(p.ownerDocument,'ins',nextId(),timestamp);ids.push(ins.getAttributeNS(W,'id'));ins.appendChild(managerPiece(seed,text));p.appendChild(ins);paragraph.parentNode.insertBefore(p,reference);created.push(p);
+  }
+  entry.outputParagraphs=position==='before'?[...created,paragraph]:[paragraph,...created];
+  return{revisionIds:ids,managerParagraphs:true};
+}
+function replaceManager(entry,nextId,timestamp){
+  if(entry.op.managerParagraphs)return insertManagerParagraphs(entry,nextId,timestamp);
+  const segments=entry.start===entry.end?[managerInsertionRun(entry)]:runSegments(entry,'docx'),ids=[];let remaining=entry.op.after;
+  for(let i=0;i<segments.length;i++){
+    const s=segments[i],left=Math.max(0,entry.start-s.start),right=Math.min(s.text.length,entry.end-s.start),old=s.text.slice(left,right);
+    const length=i===segments.length-1?remaining.length:Math.min(old.length,remaining.length),value=remaining.slice(0,length);remaining=remaining.slice(length);
+    const nodes=[];if(left)nodes.push(managerPiece(s.run,s.text.slice(0,left)));
+    if(old){const del=revision(s.run.ownerDocument,'del',nextId(),timestamp);ids.push(del.getAttributeNS(W,'id'));del.appendChild(managerPiece(s.run,old,{deleted:true}));nodes.push(del);}
+    if(value){const ins=revision(s.run.ownerDocument,'ins',nextId(),timestamp);ids.push(ins.getAttributeNS(W,'id'));ins.appendChild(managerPiece(s.run,value));nodes.push(ins);}
+    if(right<s.text.length)nodes.push(managerPiece(s.run,s.text.slice(right)));replaceNodeWith(s.run,nodes);
+  }
+  if(entry.op.managerDeleteParagraph){
+    let next=entry.paragraph.nextSibling;while(next&&next.nodeType!==1)next=next.nextSibling;
+    // Deleting the final paragraph of a table cell would invalidate its native
+    // structure; retain its empty paragraph while removing all obsolete text.
+    if(tag(next,W,'p')&&!elements(entry.paragraph,W,'sectPr').length)ids.push(markManagerParagraph(entry.paragraph,'del',nextId,timestamp));
+  }
+  return{revisionIds:ids};
+}
 
 const sectionReplacement=op=>op.kind==='replace'&&['contract_section','user_fee_text','equal_fee_tiers','user_custom_section'].includes(op.source);
 function sectionContent(entry,kind){
@@ -177,6 +246,7 @@ function replaceSection(entry,kind,nextId,timestamp){
 }
 
 function replace(entry,kind,nextId,timestamp) {
+  if(kind==='docx'&&entry.op.source==='manager')return replaceManager(entry,nextId,timestamp);
   if(sectionReplacement(entry.op))return replaceSection(entry,kind,nextId,timestamp);
   const segments=runSegments(entry,kind),ids=[];let remaining=entry.op.after;
   for(let i=0;i<segments.length;i++){
@@ -269,8 +339,9 @@ async function prepare(pkg,review) {
     const op={...raw};
     if(!op.id||ids.has(op.id))fail('审阅操作编号缺失或重复。');ids.add(op.id);
     if(!['replace','highlight','comment'].includes(op.kind))fail(`不支持的审阅操作：${op.kind}`);
-    if(!Number.isInteger(op.start)||op.start<0||typeof op.before!=='string'||!op.before.length)fail('审阅操作缺少有效原文位置。');
-    if(op.kind==='replace'&&(typeof op.after!=='string'||(sectionReplacement(op)?/[\r\t]/:/[\r\n\t]/).test(op.after)))fail('替换内容包含不支持的分段或制表结构，需人工核对。');
+    const manager=kind==='docx'&&op.source==='manager'&&op.kind==='replace';
+    if(!Number.isInteger(op.start)||op.start<0||typeof op.before!=='string'||(!op.before.length&&!manager))fail('审阅操作缺少有效原文位置。');
+    if(op.kind==='replace'&&(typeof op.after!=='string'||(sectionReplacement(op)||manager?/[\r\t]/:/[\r\n\t]/).test(op.after)))fail('替换内容包含不支持的分段或制表结构，需人工核对。');
     const descriptor=paragraphsById.get(op.paragraphId);
     if(!descriptor||descriptor.part!==op.part||descriptor.index!==op.index)fail(`审阅操作无法唯一定位原段落：${op.id}`);
     if(!Number.isInteger(op.index)||op.index<0)fail('审阅段落编号无效。');
@@ -279,9 +350,14 @@ async function prepare(pkg,review) {
     const source=textOf(paragraph,kind);
     const entry={op,paragraph,start:op.start,end:op.start+op.before.length};
     if(source!==descriptor.text)failAt(entry,'模板内容在审阅后发生变化');
+    if(entry.start>source.length)failAt(entry,'审阅位置超出段落末尾');
     if(source.slice(entry.start,entry.end)!==op.before)failAt(entry,'审阅原文与指定位置不匹配');
     if(kind==='docx'&&op.kind==='comment'&&op.part!=='word/document.xml')failAt(entry,'页眉、页脚或脚注中的批注暂不支持，请人工核对');
-    if(sectionReplacement(op))sectionContent(entry,kind);else runSegments(entry,kind);
+    if(op.managerParagraphs){
+      const {position,texts}=op.managerParagraphs;
+      if(!manager||!['before','after'].includes(position)||!Array.isArray(texts)||!texts.length||texts.some(t=>typeof t!=='string'||!t||/[\r\n\t]/.test(t))||op.before!==''||op.start!==(position==='before'?0:source.length)||op.after!==(position==='before'?texts.join('\n')+'\n':'\n'+texts.join('\n')))failAt(entry,'经理简介新增段落结构不完整');
+      entry.managerSeed=managerParagraphSeed(entry).cloneNode(true);
+    }else if(manager&&entry.start===entry.end)managerInsertionRun(entry);else if(sectionReplacement(op))sectionContent(entry,kind);else runSegments(entry,kind);
     const key=`${op.part}\u0000${op.index}`;
     if(!groups.has(key))groups.set(key,{paragraph,source,entries:[]});groups.get(key).entries.push(entry);
   }
@@ -327,7 +403,7 @@ export async function writeMaterial(materialReview,{month,targetName,now=new Dat
   const pptState=kind==='pptx'&&hasComments?await createPptCommentState(pkg,AUTHOR):null;
   const results=[],commentIds=[];
   for(const group of groups.values()){
-    const replacements=group.entries.filter(e=>e.op.kind==='replace').sort((a,b)=>b.start-a.start);
+    const replacements=group.entries.filter(e=>e.op.kind==='replace').sort((a,b)=>b.start-a.start||(a.op.managerParagraphs?.position==='after'?-1:b.op.managerParagraphs?.position==='after'?1:a.op.managerParagraphs?.position==='before'?1:b.op.managerParagraphs?.position==='before'?-1:0));
     for(const entry of replacements)results.push({id:entry.op.id,kind:'replace',...replace(entry,kind,nextId,timestamp)});
     for(const entry of group.entries.filter(e=>e.op.kind==='highlight'))results.push({id:entry.op.id,kind:'highlight',...highlight(entry,kind,replacements)});
     for(const entry of group.entries.filter(e=>e.op.kind==='comment')){
@@ -336,8 +412,9 @@ export async function writeMaterial(materialReview,{month,targetName,now=new Dat
     }
     let expected=group.source;
     for(const r of replacements)expected=expected.slice(0,r.start)+r.op.after+expected.slice(r.end);
-    const outputParagraphs=replacements[0]?.outputParagraphs;
-    const actual=outputParagraphs?outputParagraphs.map(p=>textOf(p,kind)).join('\n'):textOf(group.paragraph,kind);
+    const before=replacements.filter(e=>e.op.managerParagraphs?.position==='before').flatMap(e=>e.outputParagraphs.filter(p=>p!==group.paragraph)),after=replacements.filter(e=>e.op.managerParagraphs?.position==='after').flatMap(e=>e.outputParagraphs.filter(p=>p!==group.paragraph));
+    const outputParagraphs=before.length||after.length?[...before,group.paragraph,...after]:replacements[0]?.outputParagraphs;
+    const actual=outputParagraphs?outputParagraphs.map(p=>(before.length||after.length)&&p!==group.paragraph?managerBodyText(p):textOf(p,kind)).join('\n'):textOf(group.paragraph,kind);
     if(actual!==expected)fail('输出文字与核对结果不一致，已停止生成。');
     pkg.mark(group.entries[0].op.part);
   }

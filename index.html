@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="根据合同更新产品要素，保留模板原话术与格式。在浏览器本地读取并导出 Word 和 PowerPoint。">
-  <title>产品要素工作台</title><link rel="stylesheet" href="styles.css?v=20261029-company-versions">
+  <title>产品要素工作台</title><link rel="stylesheet" href="styles.css?v=20261029-manager">
 </head>
 <body>
   <header class="topbar"><a class="brand" href="./" aria-label="产品要素工作台首页"><span class="brand-mark">P</span><span>产品要素工作台<small>PRODUCT MATERIALS</small></span></a><div class="top-meta"><span class="local-dot"></span>文件在本机处理<a href="https://github.com/wtt982887807/product-material-web" target="_blank" rel="noopener">使用说明 ↗</a></div></header>
   <main>
-    <section class="intro"><div><p class="eyebrow">合同为依据 · 模板为底稿</p><h1>更新要素，保留你的表达。</h1><p class="intro-copy">上传合同和近似产品模板。共同要素统一核对，差异局部修改，未确定的参数保留原值供审阅。</p></div><div class="month-card"><label for="month-value">本次制作月份</label><input id="month-value" type="month" min="2000-01" max="2099-12" required aria-label="本次制作月份"><small>用于输出文件名和下载包</small><button class="text-button" id="month-reset" type="button">恢复当月</button></div></section>
+    <section class="intro"><div><p class="eyebrow">合同为依据 · 模板为底稿</p><h1>更新要素，保留你的表达。</h1><p class="intro-copy">上传合同和近似产品模板。共同要素统一核对，差异局部修改，未确定的参数保留原值供审阅。</p></div><div class="month-card"><label for="month-value">本次制作日期</label><div class="date-control"><input id="month-value" type="date" min="2000-01-01" max="2099-12-31" lang="zh-CN" required aria-label="本次制作日期"><span class="date-label" id="production-date-display" aria-hidden="true"></span></div><small>年月用于文件命名；完整日期用于计算年限</small><button class="text-button" id="month-reset" type="button">恢复今日</button></div></section>
     <ol class="steps" aria-label="处理步骤"><li class="active" id="step-upload"><b>01</b> 选择文件</li><li id="step-review"><b>02</b> 核对要素</li><li id="step-download"><b>03</b> 下载物料</li></ol>
     <section class="workspace" id="upload-section">
       <div class="section-heading"><div><h2>准备这次的文件</h2><p>一份目标产品合同，以及至少一份模板。</p></div><span class="section-note">模板可与合同产品不同名</span></div>
@@ -17,8 +17,9 @@
         <div class="upload-card" id="templates-drop"><div class="file-icon light">模板</div><h3>要更新的物料 <span class="required">至少一份</span></h3><p>PPT、一页通或海报 · DOCX / DOC / RTF / PPTX</p><label class="file-button secondary" for="templates-input">选择模板，可多选</label><input id="templates-input" type="file" accept=".docx,.doc,.rtf,.pptx" multiple><div class="file-list" id="template-files" aria-live="polite"></div></div>
       </div>
       <section class="company-upload" id="company-drop" aria-labelledby="company-heading"><div><h3 id="company-heading">一页通公司介绍 <span class="required">可选 · 仅用于 Word</span></h3><p>已内置 2026.10 通用版和建行版，默认使用通用版。上传新版仅更新当前选中的版本，本浏览器会分别保存。</p><p id="company-status" class="company-status" aria-live="polite">正在准备公司介绍…</p></div><div class="company-actions"><div class="company-version-control"><label for="company-variant">版本切换</label><select id="company-variant" aria-label="公司介绍版本切换"><option value="general">通用版</option><option value="ccb">建行版</option></select></div><a id="company-download" class="text-button" hidden download>下载当前模板</a><label class="file-button secondary" for="company-input">上传最新公司介绍</label><input id="company-input" type="file" accept=".docx"><button class="text-button" id="company-clear" type="button" hidden>恢复网页内置版本</button></div></section>
+      <section class="company-upload manager-upload" id="manager-drop" aria-labelledby="manager-heading"><div><h3 id="manager-heading">一页通经理介绍 <span class="required">基金经理／投资经理 · 仅用于 Word</span></h3><p>按 Excel 完整更新简介，Word 审阅只标差异。可拖入新版模板，本浏览器会保存并沿用。</p><p>有从业、投资起始日期时，按本次制作日期计算完整年数；未填写日期则沿用模板年限。</p><p id="manager-status" class="company-status" aria-live="polite">正在准备经理介绍…</p></div><div class="company-actions"><a id="manager-download" class="text-button" hidden download aria-label="下载当前经理介绍模板">下载当前模板</a><label class="file-button secondary" for="manager-input">上传经理介绍 Excel</label><input id="manager-input" type="file" accept=".xlsx" aria-label="上传经理介绍 Excel"><button class="text-button" id="manager-clear" type="button" hidden>恢复网页内置版本</button></div></section>
       <p class="preparation-note">Word 模板会先自动接受旧修订；旧版 DOC / RTF 自动转换成 DOCX，再进行本轮审阅修改。</p>
-      <div class="scope-note"><strong>更新范围</strong><span>产品要素＋一页通匹配到的公司介绍。海报和PPT不更新公司介绍；历史业绩及人员介绍保持原样。</span></div>
+      <div class="scope-note"><strong>更新范围</strong><span>产品要素＋一页通匹配到的公司介绍、经理介绍。海报和PPT仅更新产品要素；历史业绩保持原样。</span></div>
       <div class="action-row"><p id="selection-hint">选好文件后，开始核对。</p><button class="primary-button" id="analyze-button" disabled>开始核对 <span>→</span></button></div>
     </section>
     <section class="progress-panel" id="progress-panel" hidden aria-live="polite"><div class="spinner"></div><div><strong id="progress-title">正在读取文件</strong><p id="progress-detail">共同要素只核对一次。</p></div></section>
@@ -49,9 +50,9 @@
       </section>
       <div class="review-layout"><section class="facts-panel"><div class="panel-header"><h3>要素核对</h3><div class="filters" role="group" aria-label="筛选要素"><button class="selected" data-filter="focus">需关注</button><button data-filter="all">全部</button><button data-filter="pending">待核</button></div></div><div id="facts-list"></div></section><aside class="delivery-panel"><h3>本次输出</h3><div id="delivery-list"></div><p class="delivery-note">黄色表示原值仍需确认，不影响生成审阅稿。下载后可在 Word 中查看修订与批注。</p><button class="primary-button full" id="generate-button">生成并下载物料</button><p id="generation-status" class="generation-status" role="status" aria-live="polite" hidden></p><div id="download-list" aria-live="polite"></div></aside></div>
     </section>
-    <section class="how-it-works"><div><span>01</span><strong>同一事实，统一核对</strong><p>保留各模板自己的句式与位置。</p></div><div><span>02</span><strong>缺项保留，局部标黄</strong><p>不把旧值删成整段“待补充”。</p></div><div><span>03</span><strong>产品更新，月份自动</strong><p>制作月份只用于文件命名。</p></div></section>
+    <section class="how-it-works"><div><span>01</span><strong>同一事实，统一核对</strong><p>保留各模板自己的句式与位置。</p></div><div><span>02</span><strong>缺项保留，局部标黄</strong><p>不把旧值删成整段“待补充”。</p></div><div><span>03</span><strong>产品更新，月份自动</strong><p>文件名取制作日期的年月，年限按完整日期计算。</p></div></section>
   </main>
-  <footer><span>产品要素工作台 · 本地文件处理</span><span>合同和模板在本机处理；网页自带公司介绍，可上传新版覆盖。</span></footer>
-  <script src="vendor/jszip.min.js"></script><script src="vendor/docToText.js"></script><script type="module" src="src/bootstrap.js?v=20261029-company-versions"></script>
+  <footer><span>产品要素工作台 · 本地文件处理</span><span>合同和模板在本机处理；网页自带公司与经理介绍，支持上传和下载模板。</span></footer>
+  <script src="vendor/jszip.min.js"></script><script src="vendor/docToText.js"></script><script type="module" src="src/bootstrap.js?v=20261029-manager"></script>
 </body>
 </html>
