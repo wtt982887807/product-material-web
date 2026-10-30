@@ -102,7 +102,7 @@ function showManager(){
  if(state.managerBytes){state.managerDownloadUrl=URL.createObjectURL(new Blob([state.managerBytes],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));link.href=state.managerDownloadUrl;link.download=state.manager.name;}
  else{link.href=state.managerTemplate?.url||'';link.download=state.managerTemplate?.name||'';}
 }
-async function useDefaultManager(){const {DEFAULT_MANAGER_PROFILE,DEFAULT_MANAGER_TEMPLATE}=await import('./default-manager-profile.js?v=20261029-manager');state.manager=DEFAULT_MANAGER_PROFILE;state.managerTemplate=DEFAULT_MANAGER_TEMPLATE;state.managerBytes=null;state.managerIsDefault=true;state.managerPersisted=false;}
+async function useDefaultManager(){const {DEFAULT_MANAGER_PROFILE,DEFAULT_MANAGER_TEMPLATE}=await import('./default-manager-profile.js?v=20261030-tenure');state.manager=DEFAULT_MANAGER_PROFILE;state.managerTemplate=DEFAULT_MANAGER_TEMPLATE;state.managerBytes=null;state.managerIsDefault=true;state.managerPersisted=false;}
 async function restoreManager(){
  try{
   await useDefaultManager();const {applyManagerProfile}=await import('./manager-profile.js?v=20261029-manager');state.applyManagerProfile=applyManagerProfile;
